@@ -6,6 +6,7 @@
 #include "libovr_gaze.hpp"
 #include "native_gaze_selection.hpp"
 #include "afw_gaze.hpp"
+#include "gaze_envelope.hpp"
 
 #include <Windows.h>
 
@@ -507,6 +508,7 @@ bool calculate_coordinated_crop(
     // depend on guessed left/right evaluation order. Require stereo and a
     // full local view; packed subrect projections need explicit XR mapping.
     bool calibrated_vertical_flip{};
+    bool envelope_match{};
     const auto aligned_center = [&](const CheekyGazeViewV1* xr_view) {
         auto center = fixed_center(fixed_settings, render_width, render_height);
         float u{}, v{};
@@ -534,7 +536,7 @@ bool calculate_coordinated_crop(
             auto& view = diagnostics.views[index];
             view.alignment_source = source;
             view.aligned_u = center.u; view.aligned_v = center.v;
-            if (xr_view && eye_assignment.shared_source) {
+            if (xr_view && (eye_assignment.shared_source || envelope_match)) {
                 auto& other = diagnostics.views[1 - index];
                 other.alignment_source = source;
                 other.aligned_u = center.u; other.aligned_v = center.v;
@@ -642,20 +644,6 @@ bool calculate_coordinated_crop(
     }
     // The calibrated transform above already includes the vertical flip.
     calibrated_vertical_flip = false;
-    const bool shared_source = marker_match && eye_assignment.shared_source;
-    // Both submitted images were verified to contain the same source. That
-    // source gets one binocular center, not an arbitrary left/right role.
-    CheekyGazeViewV1 shared_view = snapshot.views[0];
-    if (shared_source) {
-        const auto& other = snapshot.views[1];
-        shared_view.flags &= other.flags;
-        shared_view.center_u = (shared_view.center_u + other.center_u) * .5F;
-        shared_view.center_v = (shared_view.center_v + other.center_v) * .5F;
-        shared_view.forward_u = (shared_view.forward_u + other.forward_u) * .5F;
-        shared_view.forward_v = (shared_view.forward_v + other.forward_v) * .5F;
-        shared_view.next_jump_u = (shared_view.next_jump_u + other.next_jump_u) * .5F;
-        shared_view.next_jump_v = (shared_view.next_jump_v + other.next_jump_v) * .5F;
-    }
     if (marker_match) { matched_index = eye_assignment.eye_index; match_count = 1U; }
     std::array<GazeProjection, 2> xr_projections{};
     for (unsigned i = 0; i < (std::min)(snapshot.view_count, CHEEKY_GAZE_MAX_VIEWS); ++i) {
@@ -740,6 +728,57 @@ bool calculate_coordinated_crop(
             packed_stereo_match = true;
         }
     }
+    // Alternating-eye hosts evaluate one DLSS view per frame inside a symmetric
+    // envelope of both eyes. Proven by the game camera or the pixel-exact output
+    // size, the envelope maps either eye's gaze without an eye identity; both
+    // eyes then share one binocular center like a verified shared source.
+    GazeEnvelopeResult envelope{};
+    if (match_count == 0U && !marker_match && snapshot.view_count == 2U &&
+        (snapshot.status_flags & CHEEKY_GAZE_STATUS_MAPPING_READY) != 0U &&
+        (snapshot.status_flags & CHEEKY_GAZE_STATUS_UNSUPPORTED_VIEW_CONFIG) == 0U &&
+        (snapshot.status_flags & CHEEKY_GAZE_STATUS_AMBIGUOUS_RESOURCE) == 0U) {
+        GazeEnvelopeInput envelope_input{};
+        envelope_input.view_count = snapshot.view_count;
+        envelope_input.camera = camera;
+        envelope_input.output_origin_x = output_origin_x;
+        envelope_input.output_origin_y = output_origin_y;
+        envelope_input.output_width = output_width;
+        envelope_input.output_height = output_height;
+        for (std::uint32_t index{}; index < 2U; ++index) {
+            const auto& source = snapshot.views[index];
+            envelope_input.views[index] = {
+                xr_projections[index],
+                source.image_rect_x,
+                source.image_rect_y,
+                source.image_rect_width,
+                source.image_rect_height,
+                source.array_index,
+                source.resource_identity,
+                source.swapchain_identity,
+                (source.flags & CHEEKY_GAZE_VIEW_RESOURCE_VALID) != 0U,
+            };
+        }
+        envelope = resolve_gaze_envelope(envelope_input);
+        if (envelope.valid) {
+            bool projected = true;
+            for (unsigned eye = 0; eye < 2 && projected; ++eye) {
+                auto& v = snapshot.views[eye];
+                // Fields the layer did not publish may hold anything; only
+                // published fields can veto the route.
+                const auto remap = [&](float& u, float& y, const bool required) {
+                    return project_into_gaze_envelope(xr_projections[eye], envelope.frustum, u, y) || !required;
+                };
+                projected = remap(v.forward_u, v.forward_v, (v.flags & CHEEKY_GAZE_VIEW_FORWARD_VALID) != 0U) &&
+                    remap(v.next_jump_u, v.next_jump_v, (v.flags & CHEEKY_GAZE_VIEW_NEXT_JUMP_VALID) != 0U) &&
+                    remap(v.center_u, v.center_v, (snapshot.status_flags & CHEEKY_GAZE_STATUS_GAZE_VALID) != 0U);
+            }
+            if (projected) {
+                matched_index = 0U;
+                match_count = 1U;
+                envelope_match = true;
+            }
+        }
+    }
     // Explicit manual fallback: dimensions cannot prove eye identity or UV geometry.
     // Never reuse calibrated roles after their session/backend proof was rejected.
     if (settings.manual_stereo_mapping && match_count == 0U &&
@@ -770,6 +809,21 @@ bool calculate_coordinated_crop(
                 layout_stereo_match = true;
             }
         }
+    }
+    const bool shared_source = (marker_match && eye_assignment.shared_source) || envelope_match;
+    // Both submitted images were verified to contain the same source, or map
+    // into one envelope. That source gets one binocular center, not an
+    // arbitrary left/right role.
+    CheekyGazeViewV1 shared_view = snapshot.views[0];
+    if (shared_source) {
+        const auto& other = snapshot.views[1];
+        shared_view.flags &= other.flags;
+        shared_view.center_u = (shared_view.center_u + other.center_u) * .5F;
+        shared_view.center_v = (shared_view.center_v + other.center_v) * .5F;
+        shared_view.forward_u = (shared_view.forward_u + other.forward_u) * .5F;
+        shared_view.forward_v = (shared_view.forward_v + other.forward_v) * .5F;
+        shared_view.next_jump_u = (shared_view.next_jump_u + other.next_jump_u) * .5F;
+        shared_view.next_jump_v = (shared_view.next_jump_v + other.next_jump_v) * .5F;
     }
     diagnostics.mapping_ambiguous = diagnostics.mapping_ambiguous ||
         match_count > 1U;
@@ -815,6 +869,9 @@ bool calculate_coordinated_crop(
             static_cast<unsigned long long>(view_id), static_cast<unsigned long long>(resource_identity),
             output_origin_x, output_origin_y, output_width, output_height,
             eye_assignment.assigned ? 1U : 0U, eye_assignment.eye_index, snapshot.status_flags, snapshot.view_count);
+        trace_event("Gaze envelope view=%llu proof=%u expected=%ux%u half_tangents=(%.6f,%.6f)",
+            static_cast<unsigned long long>(view_id), static_cast<unsigned>(envelope.proof),
+            envelope.expected_width, envelope.expected_height, envelope.frustum.right, envelope.frustum.up);
         for (unsigned i = 0; i < (std::min)(snapshot.view_count, CHEEKY_GAZE_MAX_VIEWS); ++i) {
             const auto& v = snapshot.views[i];
             trace_event("Gaze mapping XR eye=%u resource=0x%llX swapchain=0x%llX rect=(%d,%d %ux%u) array=%u flags=0x%X",
@@ -880,7 +937,7 @@ bool calculate_coordinated_crop(
             "VR gaze mapping established view=%llu eye=%u route=%s",
             static_cast<unsigned long long>(view_id),
             state.mapping.view_index,
-            marker_match ? "pixel-marker" : projection_match ? "camera-projection" : copy_match ? "submitted-copy" : packed_stereo_match ? "packed-stereo" : layout_stereo_match ? "manual-stereo-layout" : "exact-resource"
+            marker_match ? "pixel-marker" : projection_match ? "camera-projection" : copy_match ? "submitted-copy" : packed_stereo_match ? "packed-stereo" : envelope_match ? "symmetric-envelope" : layout_stereo_match ? "manual-stereo-layout" : "exact-resource"
         );
     }
 
@@ -894,6 +951,7 @@ bool calculate_coordinated_crop(
             diagnostics.views[index].projection_mapping = false;
             diagnostics.views[index].marker_mapping = false;
             diagnostics.views[index].layout_mapping = false;
+            diagnostics.views[index].envelope_mapping = false;
         }
     }
     if (eye_assignment.assigned && eye_assignment.eye_index < CHEEKY_GAZE_MAX_VIEWS) {
@@ -914,6 +972,7 @@ bool calculate_coordinated_crop(
         view_diagnostics.copy_mapping = copy_match;
         view_diagnostics.projection_mapping = projection_match;
         view_diagnostics.marker_mapping = marker_match;
+        view_diagnostics.envelope_mapping = envelope_match;
         const auto& projected = snapshot.views[index];
         view_diagnostics.submitted_projection = (projected.flags & CHEEKY_GAZE_VIEW_SUBMITTED_PROJECTION) != 0;
         view_diagnostics.fov_tangents = {std::tan(projected.fov_left), std::tan(projected.fov_right),

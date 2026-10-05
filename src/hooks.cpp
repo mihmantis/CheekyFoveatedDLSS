@@ -2503,6 +2503,11 @@ DebugExposure current_streamline_debug_exposure(const void* frame, const void* c
     gaze_projection = streamline_gaze_projections.find(evaluation.viewport.value,
         camera_frame_key, GetTickCount64());
     ReleaseSRWLockShared(&streamline_lock);
+    static std::atomic<std::uint32_t> projection_miss_logs{};
+    if (!gaze_projection.valid && projection_miss_logs.fetch_add(1U, std::memory_order_relaxed) < 4U) {
+        trace_event("Gaze projection unavailable for evaluation viewport=%u frame_key=%llu",
+            evaluation.viewport.value, static_cast<unsigned long long>(camera_frame_key));
+    }
     {
     const ScopedGazeProjection projection_scope(streamline_view_id, gaze_projection);
     evaluation.backend = prepare_d3d12_streamline(
@@ -3262,6 +3267,14 @@ std::uint32_t hook_sl_set_constants(
             static_cast<const SlConstants*>(values)->camera_view_to_clip.values);
         if (result != 0U || static_cast<const SlConstants*>(values)->orthographic_projection != 0)
             projection = {};
+        static std::atomic<std::uint32_t> rejected_projection_logs{};
+        if (!projection.valid && rejected_projection_logs.fetch_add(1U, std::memory_order_relaxed) < 2U) {
+            const auto& m = static_cast<const SlConstants*>(values)->camera_view_to_clip.values;
+            trace_event("slSetConstants projection rejected viewport=%u orthographic=%d result=0x%08X "
+                "m=[%g %g %g %g | %g %g %g %g | %g %g %g %g | %g %g %g %g]",
+                id, static_cast<int>(static_cast<const SlConstants*>(values)->orthographic_projection), result,
+                m[0], m[1], m[2], m[3], m[4], m[5], m[6], m[7], m[8], m[9], m[10], m[11], m[12], m[13], m[14], m[15]);
+        }
         const auto camera_frame_key = gaze_frame_key(frame);
         AcquireSRWLockExclusive(&streamline_lock);
         streamline_gaze_projections.record(id, camera_frame_key, GetTickCount64(), projection);
