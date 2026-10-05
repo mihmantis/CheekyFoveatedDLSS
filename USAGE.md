@@ -63,6 +63,16 @@ OpenXR eye. Without that mapping, a valid current-view Streamline projection can
 provide the eye's optical-axis center instead; that fallback cannot infer headset
 cant. The panel reports the source used for the latest evaluated view.
 
+Alternating-eye hosts such as Mutar's NoMoreFlat mods evaluate one DLSS
+feature once per frame inside a symmetric render that envelopes both eyes, and
+show each eye a window of it. When the DLSS output size matches that envelope
+of the submitted eye rectangles to the pixel, or the game's Streamline camera
+projection is that envelope, Cheeky maps gaze and forward alignment through the
+envelope without identifying the eye. Both eyes then report the **symmetric
+envelope** route and share one binocular center; the remaining difference
+between the eyes is vergence, far below the fovea size. Marker calibration
+cannot complete on such hosts and reports **Waiting for a second DLSS view**.
+
 Automatic alignment controls both horizontal and vertical placement, keeping the
 center stable when the fovea size changes, except where the crop reaches an image
 edge. With automatic alignment enabled, **Height offset** adjusts the fixed center up

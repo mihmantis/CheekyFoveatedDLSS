@@ -15,6 +15,7 @@
 #include "gaze_foveation.hpp"
 #include "gaze_math.hpp"
 #include "gaze_policy.hpp"
+#include "gaze_envelope.hpp"
 #include "streamline_viewport.hpp"
 #include "streamline_create_extent.hpp"
 #include "openvr_gaze.hpp"
@@ -461,6 +462,80 @@ void test_packed_stereo_mapping_policy() {
     input.output_origin_x = 1U;
     expect(select_packed_stereo_gaze_view(input) == unmapped_gaze_view,
         "subrect DLSS output does not use the packed fallback");
+}
+
+void test_gaze_envelope_policy() {
+    using namespace cheeky::foveated_dlss;
+    // Bigscreen Beyond 2e through SteamVR OpenXR, support bundle 21240-3776921-2:
+    // one DLSS view of 5771x5508 shown to two 4717x4717 eyes with asymmetric FOVs.
+    GazeEnvelopeInput input{};
+    input.view_count = 2U;
+    input.output_width = 5771U; input.output_height = 5508U;
+    input.views[0] = {{-1.420398F, 0.901388F, 0.959913F, -1.329384F, true}, 0, 0, 4717U, 4717U, 0U, 0x1BF87CC4840ULL, 0x1C29C198B80ULL, true};
+    input.views[1] = {{-0.918710F, 1.400311F, 0.955930F, -1.341128F, true}, 0, 0, 4717U, 4717U, 0U, 0x1C29C55AC20ULL, 0x1C29C198520ULL, true};
+    auto result = resolve_gaze_envelope(input);
+    expect(result.valid && result.proof == GazeEnvelopeProof::dimensions,
+        "envelope output size identifies an alternating-eye render of two separate eyes");
+    expect(result.expected_width == 5771U && result.expected_height == 5508U,
+        "expected envelope size matches the DLSS output to the pixel");
+    expect_near(result.frustum.right, 1.420398F, 0.0001F, "envelope half-width is the widest eye tangent");
+    expect_near(result.frustum.left, -1.420398F, 0.0001F, "envelope is horizontally symmetric");
+    expect_near(result.frustum.up, 1.341128F, 0.0001F, "envelope half-height is the tallest eye tangent");
+    expect_near(result.frustum.down, -1.341128F, 0.0001F, "envelope is vertically symmetric");
+
+    // The live gaze sample from the bundle lands on one output pixel from either eye.
+    float u0 = 0.616615F, v0 = 0.503756F, u1 = 0.401017F, v1 = 0.500344F;
+    expect(project_into_gaze_envelope(input.views[0].fov, result.frustum, u0, v0), "left eye gaze projects into the envelope");
+    expect(project_into_gaze_envelope(input.views[1].fov, result.frustum, u1, v1), "right eye gaze projects into the envelope");
+    expect_near(u0, 0.50396F, 0.0005F, "left eye gaze maps to the shared envelope column");
+    expect_near(u1, 0.50396F, 0.0005F, "right eye gaze maps to the shared envelope column");
+    expect_near(v0, 0.57208F, 0.0005F, "left eye gaze maps to the shared envelope row");
+    expect_near(v1, 0.57208F, 0.0005F, "right eye gaze maps to the shared envelope row");
+    expect_near(u0 - u1, 0.F, 0.0001F, "both eyes agree on the envelope column within vergence");
+
+    // Each eye's forward axis is the envelope center, so fixed placement needs no eye offsets.
+    for (unsigned eye = 0; eye < 2; ++eye) {
+        float fu{}, fv{};
+        expect(projection_forward_center(input.views[eye].fov, fu, fv), "eye forward center is defined");
+        expect(project_into_gaze_envelope(input.views[eye].fov, result.frustum, fu, fv), "forward projects into the envelope");
+        expect_near(fu, 0.5F, 0.0001F, "forward axis maps to the envelope center column");
+        expect_near(fv, 0.5F, 0.0001F, "forward axis maps to the envelope center row");
+    }
+
+    // Streamline camera equal to the envelope proves the layout without the size fingerprint.
+    auto camera_input = input;
+    camera_input.output_width = 6000U; camera_input.output_height = 5600U;
+    camera_input.camera = {-1.420398F, 1.420398F, 1.341128F, -1.341128F, true};
+    result = resolve_gaze_envelope(camera_input);
+    expect(result.valid && result.proof == GazeEnvelopeProof::camera, "a symmetric envelope camera projection proves the layout");
+    camera_input.camera = input.views[0].fov;
+    expect(!resolve_gaze_envelope(camera_input).valid, "a per-eye camera projection is not an envelope proof");
+
+    // Rejections: anything that is not two whole, separate, equal eye images of one envelope render.
+    auto per_eye = input; per_eye.output_width = per_eye.output_height = 4717U;
+    expect(!resolve_gaze_envelope(per_eye).valid, "a per-eye render of the eye rectangle size is not an envelope");
+    auto off_by_two = input; off_by_two.output_width = 5773U;
+    expect(!resolve_gaze_envelope(off_by_two).valid, "a two pixel size mismatch rejects the fingerprint");
+    auto shared = input; shared.views[1].resource_identity = shared.views[0].resource_identity;
+    expect(!resolve_gaze_envelope(shared).valid, "a shared eye image is not mapped through the envelope");
+    auto no_fov = input; no_fov.views[1].fov.valid = false;
+    expect(!resolve_gaze_envelope(no_fov).valid, "a missing eye FOV rejects the envelope");
+    auto unequal = input; unequal.views[1].rect_width = 4700U;
+    expect(!resolve_gaze_envelope(unequal).valid, "unequal eye rectangles reject the envelope");
+    auto sliced = input; sliced.views[1].array_index = 1U;
+    expect(!resolve_gaze_envelope(sliced).valid, "array slices keep their own routes");
+    auto subrect = input; subrect.output_origin_x = 1U;
+    expect(!resolve_gaze_envelope(subrect).valid, "a subrect DLSS output is not mapped through the envelope");
+    auto mono = input; mono.view_count = 1U;
+    expect(!resolve_gaze_envelope(mono).valid, "a single view has no envelope");
+    auto invalid_resource = input; invalid_resource.views[0].resource_valid = false;
+    expect(!resolve_gaze_envelope(invalid_resource).valid, "an unresolved eye resource rejects the envelope");
+
+    float nan_u = NAN, nan_v = 0.5F;
+    expect(!project_into_gaze_envelope(input.views[0].fov, result.frustum, nan_u, nan_v), "non-finite gaze does not project");
+    float edge_u = 1.2F, edge_v = -0.1F;
+    expect(project_into_gaze_envelope(input.views[0].fov, result.frustum, edge_u, edge_v) && edge_u <= 1.F && edge_v >= 0.F,
+        "gaze beyond the eye image still projects, clamped to the envelope");
 }
 
 void test_temporal_policy() {
@@ -1275,6 +1350,83 @@ void test_packed_alignment_coordinator(bool openvr = false) {
     unregister_stereo_view(951U); unregister_stereo_view(952U);
     test_openvr_snapshot=nullptr;
     reset_gaze_foveation();
+}
+
+
+void test_envelope_alignment_coordinator() {
+    using namespace cheeky::foveated_dlss;
+    reset_gaze_foveation();
+    Settings settings{};
+    settings.width = 0.55F; settings.height = 0.45F;
+    settings.gaze_smoothing_ms = 0.F;
+    CheekyGazeSnapshotV1 snapshot{};
+    snapshot.abi_version = CHEEKY_GAZE_ABI_VERSION;
+    snapshot.structure_size = sizeof(snapshot);
+    snapshot.view_count = 2U;
+    snapshot.swapchain_generation = 1U;
+    snapshot.session_generation = 2126U;
+    snapshot.status_flags = CHEEKY_GAZE_STATUS_MAPPING_READY | CHEEKY_GAZE_STATUS_SESSION_FOCUSED;
+    // Bigscreen Beyond 2e through SteamVR OpenXR (support bundle 21240-3776921-2):
+    // two separate 4717x4717 eyes, one 5771x5508 DLSS view evaluated once per frame.
+    const float tangents[2][4] = {{-1.420398F, 0.901388F, 0.959913F, -1.329384F},
+                                  {-0.918710F, 1.400311F, 0.955930F, -1.341128F}};
+    const float gaze_uv[2][2] = {{0.616615F, 0.503756F}, {0.401017F, 0.500344F}};
+    for (unsigned i = 0; i < 2; ++i) {
+        auto& eye = snapshot.views[i];
+        eye.view_index = i;
+        eye.flags = CHEEKY_GAZE_VIEW_RESOURCE_VALID | CHEEKY_GAZE_VIEW_FOV_VALID | CHEEKY_GAZE_VIEW_FORWARD_VALID;
+        eye.image_rect_width = eye.image_rect_height = 4717U;
+        eye.resource_identity = i ? 0x1C29C55AC20ULL : 0x1BF87CC4840ULL;
+        eye.swapchain_identity = i ? 0x1C29C198520ULL : 0x1C29C198B80ULL;
+        eye.fov_left = std::atan(tangents[i][0]); eye.fov_right = std::atan(tangents[i][1]);
+        eye.fov_up = std::atan(tangents[i][2]); eye.fov_down = std::atan(tangents[i][3]);
+        eye.forward_u = -tangents[i][0] / (tangents[i][1] - tangents[i][0]);
+        eye.forward_v = tangents[i][2] / (tangents[i][2] - tangents[i][3]);
+        eye.center_u = gaze_uv[i][0]; eye.center_v = gaze_uv[i][1];
+    }
+    CropGeometry crop{};
+    FoveationCenter center{};
+    const auto frame = [&](DlssViewId view, std::uint32_t output_width, std::uint32_t output_height) {
+        LARGE_INTEGER now{}; QueryPerformanceCounter(&now);
+        snapshot.publication_qpc = now.QuadPart;
+        ++snapshot.predicted_display_time;
+        bool reset{};
+        expect(calculate_coordinated_crop(settings, view, nullptr, 3347U, 3195U, output_width, output_height,
+            0U, 0U, crop, reset, &snapshot, &center), "alternating-eye DLSS view produces a coordinated crop");
+    };
+    // A per-eye render of the eye rectangle size has no envelope and keeps the manual fallback.
+    register_stereo_view(962U);
+    frame(962U, 4717U, 4717U); frame(962U, 4717U, 4717U); frame(962U, 4717U, 4717U);
+    expect(gaze_diagnostics().alignment_source == 0U, "eye-sized output does not take the envelope route");
+    expect(!gaze_diagnostics().views[0].resource_mapped && !gaze_diagnostics().views[1].resource_mapped,
+        "eye-sized output leaves both eyes unmapped");
+    unregister_stereo_view(962U);
+    reset_gaze_foveation();
+
+    register_stereo_view(961U);
+    frame(961U, 5771U, 5508U); frame(961U, 5771U, 5508U); frame(961U, 5771U, 5508U);
+    auto diagnostics = gaze_diagnostics();
+    for (unsigned i = 0; i < 2; ++i) {
+        expect(diagnostics.views[i].resource_mapped && diagnostics.views[i].envelope_mapping,
+            "both eyes map through the symmetric envelope of one DLSS view");
+        expect(!diagnostics.views[i].packed_stereo_mapping && !diagnostics.views[i].projection_mapping &&
+            !diagnostics.views[i].copy_mapping && !diagnostics.views[i].marker_mapping,
+            "the envelope route is reported as its own route");
+        expect(diagnostics.views[i].alignment_source == 2U, "envelope alignment reports the OpenXR source for both eyes");
+    }
+    expect(diagnostics.alignment_source == 2U, "fixed mode aligns through the OpenXR envelope");
+    expect_near(center.u, 0.5F, 0.001F, "both forward axes meet at the envelope center column");
+    expect_near(center.v, 0.5F, 0.001F, "both forward axes meet at the envelope center row");
+    expect(!diagnostics.using_gaze, "fixed mode does not report live gaze");
+
+    settings.center_mode = FoveationCenterMode::openxr_gaze;
+    snapshot.status_flags |= CHEEKY_GAZE_STATUS_GAZE_VALID;
+    frame(961U, 5771U, 5508U); frame(961U, 5771U, 5508U);
+    expect(gaze_diagnostics().using_gaze, "live gaze maps through the envelope without an eye identity");
+    expect_near(center.u, 0.50396F, 0.002F, "binocular gaze lands on the envelope column both eyes agree on");
+    expect_near(center.v, 0.57208F, 0.002F, "binocular gaze lands on the envelope row both eyes agree on");
+    unregister_stereo_view(961U);
+    clear_stereo_calibration(); reset_gaze_foveation();
 }
 
 void test_mono_gaze_coordinator() {
@@ -2771,6 +2923,7 @@ int main(int argc, char** argv) {
     test_nr_only_center(true);
     test_packed_alignment_coordinator();
     test_packed_alignment_coordinator(true);
+    test_envelope_alignment_coordinator();
     test_openvr_geometry();
     test_libovr_geometry();
     test_transport_guide_capacity();
@@ -2795,6 +2948,7 @@ int main(int argc, char** argv) {
     test_sr_crop_dimensions_during_gaze();
     test_mapping_policy();
     test_packed_stereo_mapping_policy();
+    test_gaze_envelope_policy();
     test_temporal_policy();
     test_reset_policy();
     test_abi();

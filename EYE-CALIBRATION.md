@@ -146,6 +146,12 @@ starts, source evidence is frozen; both eyes must belong to that one submission
 interval and pass the normal release, rectangle, image-index and marker checks.
 Mono, third candidates, changed source dimensions/generations and expired
 windows cannot force a mapping. OpenVR and D3D12 retain their same-frame policy.
+A D3D12 host that evaluates a single DLSS view once per XR frame never supplies
+the second candidate; every pair window then closes with one source and no
+submission. The status reports **Waiting for a second DLSS view (one view
+evaluated per frame)**, `single_source_frames` counts those windows, and gaze
+mapping uses the symmetric-envelope route described in [USAGE.md](USAGE.md)
+instead of marker identity.
 
 OpenXR calibration records span one `xrEndFrame` to the next. `xrBeginFrame`
 does not reset the source markers: hosts may render DLSS before calling it.

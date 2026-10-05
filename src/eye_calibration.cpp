@@ -174,7 +174,7 @@ struct State {
     bool unsupported_submission{};
     std::uint64_t finish_wrong_thread{}, submit_wrong_thread{}, poll_wrong_thread{};
     std::uint64_t protected_submits{}, carried_frames{}, waiting_for_sources{};
-    std::uint64_t cross_device_submits{};
+    std::uint64_t cross_device_submits{}, last_single_source_ms{};
     SubmissionContext submission_context;
     DWORD frame_thread{}, stamp_thread{}, submit_thread{}, tick_thread{};
     std::uint64_t continuous_epoch{};
@@ -455,6 +455,10 @@ constexpr const char* marker_failure_names[]{"none","no_consistent_eye_pair","am
     "wide_search_no_consistent_pair","tracking_result_missing","marker_shift_over_32px"};
 void record_rejection(State& s, const Frame& f, unsigned mask) {
     ++s.stats.rejected;
+    if (f.collect_source_pair && f.evaluations == 1 && f.submits == 0 && f.views[0].id && !f.views[1].id) {
+        ++s.stats.single_source_frames;
+        s.last_single_source_ms = GetTickCount64();
+    }
     if (f.marker_failure && f.marker_failure<=5) ++s.stats.marker_failure_counts[f.marker_failure-1];
     for (unsigned i = 0; i < s.stats.rejection_counts.size(); ++i)
         if (mask & (1U << i)) ++s.stats.rejection_counts[i];
@@ -1383,6 +1387,8 @@ EyeCalibrationStats eye_calibration_stats() noexcept {
     result.unsupported_submission = s.unsupported_submission;
     result.correction_active = result.enabled && stereo_eye_assignment(result.left_view).calibrated &&
                                stereo_eye_assignment(result.right_view).calibrated;
+    result.single_source_waiting = result.runtime_active && !result.correction_active &&
+        s.last_single_source_ms && GetTickCount64() - s.last_single_source_ms <= 1000;
     result.vertical_flip = result.correction_active && stereo_eye_assignment(result.left_view).vertical_flip;
     const auto assignment = stereo_eye_assignment(result.left_view);
     result.crop_mapping_active = result.correction_active && assignment.source_crops[0].valid &&
@@ -2116,6 +2122,7 @@ void eye_calibration_stop() noexcept {
     s.finish_wrong_thread = s.submit_wrong_thread = s.poll_wrong_thread = 0;
     s.protected_submits = s.carried_frames = s.waiting_for_sources = 0;
     s.cross_device_submits = 0;
+    s.last_single_source_ms = 0;
     s.submission_context = {};
     s.frame_thread = s.stamp_thread = s.submit_thread = s.tick_thread = 0;
     s.continuous_epoch = 0;
@@ -2136,6 +2143,8 @@ const char* eye_calibration_status(const EyeCalibrationStats& stats) noexcept {
     if (stats.correction_active)
         return !stats.crop_mapping_active ? "Eye identified; acquiring crop" :
             stats.left_view == stats.right_view ? "Active (shared mono source)" : "Active";
+    if (stats.single_source_waiting)
+        return "Waiting for a second DLSS view (one view evaluated per frame)";
     return stats.active_method == EyeCalibrationMethod::full ? "Acquiring crop and eye mapping" : "Acquiring corner eye mapping";
 }
 
@@ -2178,6 +2187,8 @@ std::string eye_calibration_json() {
         << ",\"acquisition_confirmations\":" << s.acquisition_confirmations
         << ",\"vertical_flip\":" << s.vertical_flip << ",\"crop_mapping_active\":" << s.crop_mapping_active
         << ",\"unsupported_submission\":" << s.unsupported_submission
+        << ",\"single_source_frames\":" << s.single_source_frames
+        << ",\"single_source_waiting\":" << s.single_source_waiting
         << ",\"unsupported_submissions\":" << s.unsupported_submissions << ",\"frames\":" << s.frames
         << ",\"captures\":" << s.captures << ",\"completed\":" << s.completed << ",\"valid\":" << s.valid
         << ",\"skipped\":" << s.skipped << ",\"in_flight\":" << s.in_flight

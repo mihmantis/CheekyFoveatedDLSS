@@ -53,6 +53,10 @@ struct EyeCalibrationStats {
     bool vertical_flip{};
     bool openvr_active{}, unsupported_submission{};
     std::uint64_t unsupported_submissions{};
+    // Pair windows that expired with one source view and no submission: an
+    // alternating-eye host evaluating a single DLSS view once per frame.
+    std::uint64_t single_source_frames{};
+    bool single_source_waiting{};
     // A rejected capture can fail multiple checks; counters overlap.
     std::array<std::uint64_t, 8> rejection_counts{};
     std::uint64_t rejected{}, publication_rejected{}, last_rejected_sequence{};

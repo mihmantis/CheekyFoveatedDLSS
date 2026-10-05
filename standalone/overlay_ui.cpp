@@ -383,6 +383,9 @@ void draw_gaze_details(std::string_view snapshot) {
             const auto eye = array_object(member(gaze, "eyes"), i);
             ImGui::SeparatorText(i ? "Right eye" : "Left eye");
             diagnostic_line(eye, "Mapped", "mapped");
+            if (flag(eye, "mapped"))
+                ImGui::TextWrapped("Mapping route: %s", flag(eye, "marker") ? "pixel marker" : flag(eye, "projection") ? "projection" :
+                    flag(eye, "copy") ? "copy" : flag(eye, "packed") ? "packed" : flag(eye, "envelope") ? "symmetric envelope" : "exact resource");
             diagnostic_line(eye, "DLSS view", "view_id");
             diagnostic_line(eye, "Stable matches", "stable_matches");
             ImGui::TextWrapped("Alignment: %s", alignment_name(static_cast<unsigned>(number(eye, "alignment"))));

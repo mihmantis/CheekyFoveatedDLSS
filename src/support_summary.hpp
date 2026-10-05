@@ -152,6 +152,7 @@ inline std::string support_summary(const std::string& system,
     for (const auto eye : {"Eye 0", "Eye 1"}) {
         out << eye << ": mapped=" << get(eye, "resource_mapped")
             << "; packed stereo=" << get(eye, "packed_stereo_mapping")
+            << "; envelope=" << get(eye, "envelope_mapping")
             << "; center=" << get(eye, "center_u") << ',' << get(eye, "center_v")
             << "; alignment=" << source_name(get(eye, "alignment_source")) << '\n';
     }

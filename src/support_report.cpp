@@ -242,6 +242,7 @@ std::string diagnostics_text() {
         out << "copy_mapping=" << v.copy_mapping << '\n';
         out << "projection_mapping=" << v.projection_mapping << '\n';
         out << "marker_mapping=" << v.marker_mapping << '\n';
+        out << "envelope_mapping=" << v.envelope_mapping << '\n';
         out << "alignment_source=" << v.alignment_source << '\n';
         out << "aligned_u=" << v.aligned_u << '\n';
         out << "aligned_v=" << v.aligned_v << '\n';
