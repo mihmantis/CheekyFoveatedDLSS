@@ -247,7 +247,7 @@ void update_settings(const Settings& settings) noexcept {
     std::lock_guard lock(settings_mutex);
     d3d12_lower_hook.store(settings.d3d12_lower_hook, std::memory_order_release);
     d3d12_resource_cache_capacity.store(
-        std::clamp(settings.d3d12_resource_cache_capacity, 8U, 64U),
+        std::clamp(settings.d3d12_resource_cache_capacity, 8U, 256U),
         std::memory_order_release
     );
     enabled.store(settings.enabled, std::memory_order_release);

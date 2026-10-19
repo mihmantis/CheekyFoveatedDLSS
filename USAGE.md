@@ -312,12 +312,15 @@ foveated and native frames resets both histories, so the whole image shimmers
 and the red alignment border blinks.
 
 **DX12 private resource sets** (`D3D12ResourceCacheCapacity`, default `32`,
-range 8-64) bounds how many sets Cheeky allocates. Sets are created on demand,
+range 8-256) bounds how many sets Cheeky allocates. Sets are created on demand,
 so games that rotate few lists use no more VRAM than before. Each set costs one
 R16G16B16A16 float texture of the center output size: about 30 MB for a
 2386x1562 center at 1.00x supersampling and four times that at 2.00x. The
 setting applies live without a restart. The DLSS-SR performance panel reports
-allocated and reserved sets and how often the cache was full, together with
-the foveated share of evaluations; a full cache also shows as the state
-**Private resource cache full; game DLSS used for this frame**. Support
-reports list the same counters with prepare rejections by reason.
+allocated and reserved sets, the peak reserved count, an estimate of the VRAM
+they hold, and how often the cache was full, together with the foveated share
+of evaluations; a full cache also shows as the state **Private resource cache
+full; game DLSS used for this frame**. The peak is the demand: set the capacity
+above it and the exhaustion counter stops growing. In GTA V Enhanced with
+R.E.A.L. VR the peak exceeded 64 sets. Support reports list the same counters
+with prepare rejections by reason.

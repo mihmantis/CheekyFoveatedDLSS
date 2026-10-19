@@ -195,6 +195,8 @@ struct D3D12ResourceCacheStatus {
     std::uint32_t capacity{};
     std::uint32_t entries{};
     std::uint32_t reserved{};
+    // Highest reserved count observed: the demand a capacity has to cover.
+    std::uint32_t peak_reserved{};
     std::uint64_t exhaustions{};
 };
 [[nodiscard]] D3D12ResourceCacheStatus d3d12_resource_cache_status() noexcept;

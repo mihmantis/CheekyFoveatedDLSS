@@ -43,7 +43,7 @@ struct Settings {
     // Private D3D12 resource sets, one crop-sized scratch DLSS output each. A set
     // stays reserved by the command-list recording that used it until that list
     // is reset and GPU-complete, so engines that rotate many lists need more sets
-    // or their evaluations fall back to the game's DLSS.
+    // or their evaluations fall back to the game's DLSS. Range 8-256.
     std::uint32_t d3d12_resource_cache_capacity{32U};
     bool d3d11_use_d3d12_transport{false};
     bool peripheral_dlaa_enabled{true};

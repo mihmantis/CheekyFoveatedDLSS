@@ -1705,7 +1705,7 @@ void draw_settings_overlay(reshade::api::effect_runtime*) {
             "DX12 private resource sets",
             &resource_sets,
             8,
-            64,
+            256,
             "%d sets",
             ImGuiSliderFlags_AlwaysClamp
         )) {
@@ -1717,8 +1717,8 @@ void draw_settings_overlay(reshade::api::effect_runtime*) {
         const auto cache = d3d12_resource_cache_status();
         if (cache.entries != 0U || cache.exhaustions != 0U)
             ImGui::TextDisabled(
-                "Private resource sets: %u of %u allocated, %u reserved; cache full %llu times.",
-                cache.entries, cache.capacity, cache.reserved,
+                "Private resource sets: %u of %u allocated, %u reserved (peak %u); cache full %llu times.",
+                cache.entries, cache.capacity, cache.reserved, cache.peak_reserved,
                 static_cast<unsigned long long>(cache.exhaustions)
             );
     }

@@ -212,6 +212,7 @@ std::string diagnostics_text() {
             << "resource_cache_capacity=" << cache.capacity << '\n'
             << "resource_cache_entries=" << cache.entries << '\n'
             << "resource_cache_reserved=" << cache.reserved << '\n'
+            << "resource_cache_peak_reserved=" << cache.peak_reserved << '\n'
             << "resource_cache_exhaustions=" << cache.exhaustions << '\n';
         for (std::size_t i = 0; i < static_cast<std::size_t>(D3D12PrepareProbe::count); ++i) {
             const auto probe = static_cast<D3D12PrepareProbe>(i);

@@ -38,7 +38,8 @@ std::string resource_cache_json() {
     const auto cache = d3d12_resource_cache_status();
     std::ostringstream out;
     out << "{\"capacity\":" << cache.capacity << ",\"entries\":" << cache.entries
-        << ",\"reserved\":" << cache.reserved << ",\"exhaustions\":" << cache.exhaustions << '}';
+        << ",\"reserved\":" << cache.reserved << ",\"peak_reserved\":" << cache.peak_reserved
+        << ",\"exhaustions\":" << cache.exhaustions << '}';
     return out.str();
 }
 std::string prepare_rejections_json() {

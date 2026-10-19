@@ -630,14 +630,22 @@ void draw_sr_performance(std::string_view snapshot, const Settings& s) {
                 const auto cache = member(snapshot, "d3d12_resource_cache");
                 if (!cache.empty()) {
                     ImGui::SeparatorText("Private resources");
-                    ImGui::TextWrapped("Resource sets: %.0f of %.0f allocated, %.0f reserved by live command lists",
-                        number(cache, "entries"), number(cache, "capacity"), number(cache, "reserved"));
+                    const auto crop = member(api, "crop");
+                    // One R16G16B16A16 float scratch output per set, scaled by center supersampling.
+                    const auto set_mb = number(crop, "output_width") * number(crop, "output_height") * 8.0 *
+                        s.center_supersampling * s.center_supersampling / 1048576.0;
+                    const auto entries = number(cache, "entries"), capacity = number(cache, "capacity");
+                    const auto peak = number(cache, "peak_reserved");
+                    ImGui::TextWrapped("Resource sets: %.0f of %.0f allocated (about %.0f MB), %.0f reserved by live command lists, peak %.0f",
+                        entries, capacity, entries * set_mb, number(cache, "reserved"), peak);
                     const auto exhaustions = number(cache, "exhaustions");
                     const auto evaluations = number(api, "evaluations"), active_calls = number(api, "active");
                     if (exhaustions > 0) {
-                        char text[256]{};
-                        snprintf(text, sizeof(text), "Cache full %.0f times: those frames used the game's DLSS (%.0f of %.0f evaluations foveated). Raise DX12 private resource sets in General.",
-                            exhaustions, active_calls, evaluations);
+                        char text[320]{};
+                        snprintf(text, sizeof(text), "Cache full %.0f times: those frames used the game's DLSS (%.0f of %.0f evaluations foveated). %s",
+                            exhaustions, active_calls, evaluations,
+                            peak >= capacity ? "Raise DX12 private resource sets in General above the peak."
+                                             : "The counter is cumulative; it stops growing once the capacity exceeds the peak.");
                         warning(text);
                     } else if (evaluations > 0) {
                         ImGui::TextWrapped("Foveated evaluations: %.0f of %.0f", active_calls, evaluations);
@@ -808,7 +816,7 @@ void draw_overlay_ui(OverlayUiState& r,const OverlayRuntime& runtime,InputState&
                     test_control("D3D12LowerHook");
                     ImGui::TextWrapped("Off selects the higher call. Restart the game after changing this.");
                     int resource_sets = static_cast<int>(r.draft.d3d12_resource_cache_capacity);
-                    if (ImGui::SliderInt("DX12 private resource sets", &resource_sets, 8, 64, "%d sets", ImGuiSliderFlags_AlwaysClamp))
+                    if (ImGui::SliderInt("DX12 private resource sets", &resource_sets, 8, 256, "%d sets", ImGuiSliderFlags_AlwaysClamp))
                         r.draft.d3d12_resource_cache_capacity = static_cast<std::uint32_t>(resource_sets);
                     test_control("D3D12ResourceCacheCapacity");
                     ImGui::TextWrapped("Each set holds one crop-sized DLSS output and stays reserved until its command list is reset. Raise it when the DLSS-SR tab reports the private resource cache full; each set costs VRAM.");

@@ -348,6 +348,8 @@ void run_resource_cache(unsigned capacity, unsigned list_count) {
     require(rejected == list_count - expected, "Evaluations beyond the capacity were not left to the game's DLSS");
     require(status.capacity == capacity && status.entries == expected && status.reserved == expected,
         "Resource cache status does not describe the allocated and reserved sets");
+    require(status.peak_reserved >= expected + (rejected ? 1U : 0U),
+        "Peak reserved count does not record the demand that exceeded the capacity");
     require(status.exhaustions - before == rejected, "Exhaustion counter does not match the rejected evaluations");
     // Resetting the lists retires their recordings; the next list reuses a set.
     // This fixture has no observer hooks, so retire each recording explicitly,

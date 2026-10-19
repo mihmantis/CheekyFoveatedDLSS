@@ -256,7 +256,13 @@ struct D3D12Resources {
 D3D12Resources* resource_list{};
 std::uint64_t resource_use_sequence{};
 std::atomic<std::uint32_t> resource_cache_capacity_requested{32U};
+std::atomic<std::uint32_t> resource_cache_peak_reserved{};
 std::atomic<std::uint64_t> resource_cache_exhaustions{};
+void note_resource_cache_reserved(const std::uint32_t reserved) noexcept {
+    auto peak = resource_cache_peak_reserved.load(std::memory_order_relaxed);
+    while (reserved > peak &&
+        !resource_cache_peak_reserved.compare_exchange_weak(peak, reserved, std::memory_order_relaxed)) {}
+}
 // Set when this thread's prepare found every resource set reserved by a live
 // recording; the hook reports that frame as a cache exhaustion, not a rejection.
 thread_local bool resource_cache_exhausted{};
@@ -580,6 +586,8 @@ void collect_resources() noexcept {
             // alive than sets exist. Count it so the UI can show the fallback.
             resource_cache_exhaustions.fetch_add(1U, std::memory_order_relaxed);
             resource_cache_exhausted = true;
+            // Every set was reserved, and one more recording wanted one.
+            note_resource_cache_reserved(static_cast<std::uint32_t>(count) + 1U);
             return nullptr;
         }
         auto* oldest = *oldest_link;
@@ -1937,6 +1945,8 @@ D3D12ResourceCacheStatus d3d12_resource_cache_status() noexcept {
         ++status.entries;
         if (!current->lifetime.empty() || current->active_evaluations != 0U) ++status.reserved;
     }
+    note_resource_cache_reserved(status.reserved);
+    status.peak_reserved = resource_cache_peak_reserved.load(std::memory_order_relaxed);
     return status;
 }
 
