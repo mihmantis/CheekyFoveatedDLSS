@@ -972,6 +972,9 @@ bool evaluate_dlss_nr(
     if (!settings.nr_enabled) {
         diagnostics.state = DlssNrState::disabled;
         for (auto& view : views) view.was_enabled = false;
+        // Nothing was loaded when the DLL was missing, so the next enable can
+        // search again: users add nvngx_dlssnr.dll after seeing the status.
+        if (runtime.state == 2U) runtime.state = 0U;
         return false;
     }
     diagnostics.output_width = frame.output_width;

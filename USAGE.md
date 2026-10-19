@@ -89,6 +89,11 @@ The required NVIDIA and Streamline runtimes are **not distributed with this proj
 Additional notes:
 
 - DLSS-NR is off by default.
+- If the status reports that `nvngx_dlssnr.dll` could not load, place the DLL
+  beside the processing DLL or the game executable, then turn DLSS-NR off and
+  on again; the search is repeated on the next enable. The runtime log records
+  each attempt as `DLSS-NR runtime search path=... error=N` with the Windows
+  error code. A DLL that loaded but failed to initialize still needs a restart.
 - **Style** selects Standard, Natural or Cinematic. This changes a different model parameter from the old preset hints, which have been removed from the menus along with the unverified UI correction toggle.
 - **Intensity** controls the model edit from 0 (none) to 1 (full). Values above 1 from older settings files normalize to 1. **Local tone** and **Local structure** remain 0–2; compare their endpoints in a stationary scene to judge the effect.
 - **Skin structure** appears when **Automatic mask** is enabled. **Paper white** appears only when NR receives HDR input. These controls do not affect the picture outside those conditions.
