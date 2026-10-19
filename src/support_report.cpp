@@ -4,6 +4,7 @@
 #include "support_summary.hpp"
 #include "support_prompts.hpp"
 #include "diagnostics.hpp"
+#include "backend.hpp"
 #include "eye_calibration.hpp"
 #include "eye_calibration_capture.hpp"
 #include "dlss_nr.hpp"
@@ -204,6 +205,19 @@ std::string diagnostics_text() {
             << c.input_width << ',' << c.input_height << '\n'
             << "output_crop=" << c.output_base_x << ',' << c.output_base_y << ','
             << c.output_width << ',' << c.output_height << '\n';
+    }
+    {
+        const auto cache = d3d12_resource_cache_status();
+        out << "\n[DX12 private resources]\n"
+            << "resource_cache_capacity=" << cache.capacity << '\n'
+            << "resource_cache_entries=" << cache.entries << '\n'
+            << "resource_cache_reserved=" << cache.reserved << '\n'
+            << "resource_cache_exhaustions=" << cache.exhaustions << '\n';
+        for (std::size_t i = 0; i < static_cast<std::size_t>(D3D12PrepareProbe::count); ++i) {
+            const auto probe = static_cast<D3D12PrepareProbe>(i);
+            out << "prepare_rejected_" << d3d12_prepare_probe_name(probe) << '='
+                << d3d12_prepare_rejections(probe) << '\n';
+        }
     }
     out << "\n[Eye calibration]\n" << eye_calibration_json() << '\n';
     const auto g = gaze_diagnostics();

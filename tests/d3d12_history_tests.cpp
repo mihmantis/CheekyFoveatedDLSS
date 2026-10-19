@@ -9,6 +9,7 @@
 #include <cmath>
 #include <iostream>
 #include <stdexcept>
+#include <vector>
 
 namespace cheeky::foveated_dlss {
 // This fixture links the production SR backend. Independent NR/periphery
@@ -273,6 +274,101 @@ int run_d3d12_history_tests() {
         run_alternating(true, 0.F, 1U, 1.F, true);
         run_alternating(false, 0.F, 1U, 1.F, true);
         run_alternating(true, 0.F, 13U, 1.F, true);
+        return 0;
+    }
+    catch (const std::exception& e) { std::cerr << e.what() << '\n'; return 1; }
+}
+
+namespace {
+// GTA V Enhanced with R.E.A.L. VR records DLSS on a pool of worker threads, so
+// more command lists carry an evaluation than the fixed eight private resource
+// sets could serve: every further evaluation silently used the game's DLSS.
+// A set stays reserved until its list is reset, which this fixture controls.
+void run_resource_cache(unsigned capacity, unsigned list_count) {
+    reset_gaze_foveation();
+    ComPtr<IDXGIFactory4> factory; check(CreateDXGIFactory1(IID_PPV_ARGS(&factory)));
+    ComPtr<IDXGIAdapter> adapter; check(factory->EnumWarpAdapter(IID_PPV_ARGS(&adapter)));
+    ComPtr<ID3D12Device> device; check(D3D12CreateDevice(adapter.Get(), D3D_FEATURE_LEVEL_11_0, IID_PPV_ARGS(&device)));
+    std::vector<ComPtr<ID3D12CommandAllocator>> allocators(list_count + 1);
+    std::vector<ComPtr<ID3D12GraphicsCommandList>> lists(list_count + 1);
+    for (unsigned i = 0; i <= list_count; ++i) {
+        check(device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&allocators[i])));
+        check(device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, allocators[i].Get(), nullptr, IID_PPV_ARGS(&lists[i])));
+    }
+    ComPtr<ID3D12Resource> resources[4];
+    const char* names[]{"Color", "Depth", "MotionVectors", "Output"};
+    MockNgxParameters parameters;
+    for (unsigned i = 0; i < 4; ++i) {
+        D3D12_HEAP_PROPERTIES heap{}; heap.Type = D3D12_HEAP_TYPE_DEFAULT;
+        D3D12_RESOURCE_DESC desc{}; desc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+        desc.Width = desc.Height = i < 2 ? 128 : 256;
+        desc.DepthOrArraySize = desc.MipLevels = 1; desc.SampleDesc.Count = 1;
+        desc.Format = i == 1 ? DXGI_FORMAT_R32_FLOAT : i == 2 ? DXGI_FORMAT_R32G32_FLOAT : DXGI_FORMAT_R16G16B16A16_FLOAT;
+        desc.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
+        check(device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &desc,
+            i == 3 ? D3D12_RESOURCE_STATE_UNORDERED_ACCESS : D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+            nullptr, IID_PPV_ARGS(&resources[i])));
+        parameters.Set(names[i], resources[i].Get());
+    }
+    parameters.Set("Width", 128U); parameters.Set("Height", 128U);
+    parameters.Set("OutWidth", 256U); parameters.Set("OutHeight", 256U);
+    parameters.Set("DLSS.Feature.Create.Flags", 0x49U);
+    parameters.Set("Reset", 0);
+    Settings settings;
+    settings.auto_stereo_alignment = false; // Fixed placement: no coordinator state needed.
+    settings.d3d12_resource_cache_capacity = capacity;
+    const auto before = d3d12_resource_cache_status().exhaustions;
+    // Each list keeps its recording alive: the evaluation finished, but the
+    // list was neither reset nor executed, exactly like a deep render queue.
+    unsigned prepared{}, rejected{};
+    for (unsigned i = 0; i < list_count; ++i) {
+        auto* evaluation = prepare_d3d12(lists[i].Get(), &parameters, 1001U, settings);
+        if (evaluation) {
+            ++prepared;
+            require(!d3d12_take_resource_cache_exhaustion(), "Successful prepare reported cache exhaustion");
+            finish_d3d12(lists[i].Get(), &parameters, evaluation, 0xBAD00000U);
+        } else {
+            ++rejected;
+            require(d3d12_take_resource_cache_exhaustion(), "Rejected prepare was not attributed to a full cache");
+            require(!d3d12_take_resource_cache_exhaustion(), "Cache exhaustion flag was not consumed");
+        }
+    }
+    const auto status = d3d12_resource_cache_status();
+    std::cout << "D3D12 resource cache: capacity=" << capacity << " lists=" << list_count
+        << " prepared=" << prepared << " rejected=" << rejected << " entries=" << status.entries
+        << " reserved=" << status.reserved << " exhaustions=" << status.exhaustions - before << '\n';
+    const unsigned expected = list_count < capacity ? list_count : capacity;
+    require(prepared == expected, "Private resource sets did not serve one live recording each up to the capacity");
+    require(rejected == list_count - expected, "Evaluations beyond the capacity were not left to the game's DLSS");
+    require(status.capacity == capacity && status.entries == expected && status.reserved == expected,
+        "Resource cache status does not describe the allocated and reserved sets");
+    require(status.exhaustions - before == rejected, "Exhaustion counter does not match the rejected evaluations");
+    // Resetting the lists retires their recordings; the next list reuses a set.
+    for (unsigned i = 0; i < list_count; ++i) {
+        check(lists[i]->Close());
+        check(allocators[i]->Reset());
+        check(lists[i]->Reset(allocators[i].Get(), nullptr));
+    }
+    auto* evaluation = prepare_d3d12(lists[list_count].Get(), &parameters, 1001U, settings);
+    require(evaluation != nullptr, "A reset command list did not release its private resource set");
+    finish_d3d12(lists[list_count].Get(), &parameters, evaluation, 0xBAD00000U);
+    require(d3d12_resource_cache_status().entries <= capacity, "Reuse after reset grew the cache past its capacity");
+    // Retire the last recording too, so the next fixture starts from an empty cache.
+    check(lists[list_count]->Close());
+    check(allocators[list_count]->Reset());
+    check(lists[list_count]->Reset(allocators[list_count].Get(), nullptr));
+    for (auto& list : lists) list.Reset();
+    for (auto& allocator : allocators) allocator.Reset();
+    release_d3d12_resources(); reset_gaze_foveation();
+    require(d3d12_resource_cache_status().entries == 0, "Released resource cache still holds sets");
+}
+}
+
+int run_d3d12_resource_cache_tests() {
+    try {
+        run_resource_cache(8U, 12U);   // The previous fixed limit: four of twelve lists fall back.
+        run_resource_cache(16U, 12U);  // A larger cache serves every live recording.
+        run_resource_cache(8U, 8U);    // Exactly full without a single fallback.
         return 0;
     }
     catch (const std::exception& e) { std::cerr << e.what() << '\n'; return 1; }

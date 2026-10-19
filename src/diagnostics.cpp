@@ -548,6 +548,7 @@ const char* diagnostic_state_name(const DiagnosticState state) noexcept {
     case DiagnosticState::ngx_evaluation_failed: return "NGX evaluation returned failure";
     case DiagnosticState::late_attach_incomplete: return "Late attachment: waiting for complete DLSS metadata and callbacks";
     case DiagnosticState::streamline_waiting_for_ngx: return "Streamline options unavailable: waiting for underlying NGX evaluation";
+    case DiagnosticState::private_resources_exhausted: return "Private resource cache full; game DLSS used for this frame (raise DX12 private resource sets)";
     }
     return "Unknown";
 }

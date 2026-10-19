@@ -752,6 +752,10 @@ void load_settings_from_reshade() noexcept {
     static_cast<void>(reshade::get_config_value(
         nullptr, config_section, "D3D12LowerHook", settings.d3d12_lower_hook
     ));
+    static_cast<void>(reshade::get_config_value(
+        nullptr, config_section, "D3D12ResourceCacheCapacity",
+        settings.d3d12_resource_cache_capacity
+    ));
     auto center_mode = static_cast<std::uint32_t>(settings.center_mode);
     static_cast<void>(reshade::get_config_value(
         nullptr, config_section, "Enabled", settings.enabled
@@ -944,6 +948,10 @@ void load_settings_from_reshade() noexcept {
 
 void save_settings_to_reshade(const Settings& settings) noexcept {
     reshade::set_config_value(nullptr, config_section, "D3D12LowerHook", settings.d3d12_lower_hook);
+    reshade::set_config_value(
+        nullptr, config_section, "D3D12ResourceCacheCapacity",
+        settings.d3d12_resource_cache_capacity
+    );
     reshade::set_config_value(
         nullptr, config_section, "Enabled", settings.enabled
     );
@@ -1415,6 +1423,7 @@ void draw_sr_controls(Settings& settings, bool& changed) {
     ImGui::Spacing();
     if (ImGui::Button("Reset DLSS-SR defaults", ImVec2(0.0F, 0.0F))) {
         settings.d3d12_lower_hook = Settings{}.d3d12_lower_hook;
+        settings.d3d12_resource_cache_capacity = Settings{}.d3d12_resource_cache_capacity;
         const Settings defaults{};
         settings.enabled = defaults.enabled;
         settings.peripheral_dlaa_enabled = defaults.peripheral_dlaa_enabled;
@@ -1691,6 +1700,28 @@ void draw_settings_overlay(reshade::api::effect_runtime*) {
     ImGui::Text("Active DLSS hook: %s", d3d12_lower_hook_enabled() ? "Lower" : "Higher");
     if (d3d12_hook_restart_required(settings.d3d12_lower_hook))
         ImGui::TextUnformatted("DLSS hook change saved for next game restart.");
+    int resource_sets = static_cast<int>(settings.d3d12_resource_cache_capacity);
+    if (ImGui::SliderInt(
+            "DX12 private resource sets",
+            &resource_sets,
+            8,
+            64,
+            "%d sets",
+            ImGuiSliderFlags_AlwaysClamp
+        )) {
+        settings.d3d12_resource_cache_capacity = static_cast<std::uint32_t>(resource_sets);
+        changed = true;
+    }
+    ImGui::TextDisabled("Each set holds one crop-sized DLSS output and stays reserved until its command list is reset. Raise it when diagnostics report the private resource cache full.");
+    {
+        const auto cache = d3d12_resource_cache_status();
+        if (cache.entries != 0U || cache.exhaustions != 0U)
+            ImGui::TextDisabled(
+                "Private resource sets: %u of %u allocated, %u reserved; cache full %llu times.",
+                cache.entries, cache.capacity, cache.reserved,
+                static_cast<unsigned long long>(cache.exhaustions)
+            );
+    }
     int d3d11_path = settings.d3d11_use_d3d12_transport ? 1 : 0;
     if (ImGui::Combo(
             "DX11 game processing path",

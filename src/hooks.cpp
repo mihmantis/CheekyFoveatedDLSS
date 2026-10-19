@@ -4780,6 +4780,8 @@ void evaluate_nr_after_native_d3d12(
     bool& private_attempted
 ) noexcept {
     private_attempted = false;
+    // Only this evaluation's own prepare may report a full resource cache.
+    static_cast<void>(d3d12_take_resource_cache_exhaustion());
     if (!settings.enabled || command_list == nullptr || handle == nullptr ||
         parameters == nullptr || callbacks.create_feature == nullptr ||
         callbacks.evaluate_feature == nullptr ||
@@ -5102,6 +5104,7 @@ NgxResult process_d3d12_evaluation_impl(
         DiagnosticApi::d3d12,
         !settings.enabled ? DiagnosticState::disabled
         : private_attempted ? DiagnosticState::ngx_evaluation_failed
+        : d3d12_take_resource_cache_exhaustion() ? DiagnosticState::private_resources_exhausted
                             : DiagnosticState::prepare_rejected
     );
     D3D12PeripheralTimingScope sr_timing{
@@ -5278,6 +5281,7 @@ NgxResult evaluate_d3d12_c_impl(
         DiagnosticApi::d3d12,
         !settings.enabled ? DiagnosticState::disabled
         : private_attempted ? DiagnosticState::ngx_evaluation_failed
+        : d3d12_take_resource_cache_exhaustion() ? DiagnosticState::private_resources_exhausted
                             : DiagnosticState::prepare_rejected
     );
     D3D12PeripheralTimingScope sr_timing{

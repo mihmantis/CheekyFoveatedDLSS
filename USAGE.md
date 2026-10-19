@@ -33,6 +33,7 @@ The main controls and their defaults are:
 | Transition width | `0.040` | Feathers the edge of the region. |
 | Show 5 px red alignment border | Off | Displays the processed region while calibrating the fovea. |
 | DX11 game processing path | DX11 Direct | **DX12 Transport** enables DX12-only features for DX11 games. |
+| DX12 private resource sets | `32` | Private D3D12 resource sets available to foveated evaluations. Raise it when diagnostics report the private resource cache full. |
 | Foveation center | Fixed | Selects fixed placement, runtime gaze (OpenXR / OpenVR / LibOVR), or simulated gaze. |
 | Gaze smoothing | `20 ms` | Sets the time constant for gaze motion. |
 | Hold gaze on signal loss | `400 ms` | Keeps the last gaze through blinks and short dropouts before returning to fixed placement. |
@@ -296,3 +297,27 @@ calibration-setting change; continuous mode continues verifying markers.
 **Use lower DLSS hook (DX12)** is enabled by default. Cheeky processes DLSS at the feature runtime, leaving upstream core and Streamline calls intact. Turn it off to use the higher call (the previous outermost-interception path). The control is in the DLSS-SR panel for standalone/UEVR and beside the processing-path controls in ReShade.
 
 The saved setting is `D3D12LowerHook=true` (`false` selects higher). Restart the game after changing it; the active path remains unchanged until restart so existing feature handles and histories keep their owner. The runtime snapshot reports `d3d12_lower_hook_active` and `d3d12_hook_restart_required`. If the lower runtime cannot be identified or hooked, its path leaves game DLSS unchanged; it does not automatically switch to higher processing.
+
+### DX12 private resource sets
+
+Each foveated D3D12 evaluation records into a private resource set that holds
+one crop-sized scratch DLSS output, descriptors and the composite pipeline. A
+set stays reserved by the command-list recording that used it until that list
+is reset and its execution has completed on the GPU, because a recorded list
+may be executed again. Engines that record DLSS on a pool of worker threads,
+such as GTA V Enhanced with R.E.A.L. VR, keep more lists alive than the eight
+sets earlier releases allocated. Every evaluation that finds all sets reserved
+is left to the game's own DLSS for that frame. Alternating like this between
+foveated and native frames resets both histories, so the whole image shimmers
+and the red alignment border blinks.
+
+**DX12 private resource sets** (`D3D12ResourceCacheCapacity`, default `32`,
+range 8-64) bounds how many sets Cheeky allocates. Sets are created on demand,
+so games that rotate few lists use no more VRAM than before. Each set costs one
+R16G16B16A16 float texture of the center output size: about 30 MB for a
+2386x1562 center at 1.00x supersampling and four times that at 2.00x. The
+setting applies live without a restart. The DLSS-SR performance panel reports
+allocated and reserved sets and how often the cache was full, together with
+the foveated share of evaluations; a full cache also shows as the state
+**Private resource cache full; game DLSS used for this frame**. Support
+reports list the same counters with prepare rejections by reason.

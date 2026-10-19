@@ -10,6 +10,7 @@
 #include "processing_owner.hpp"
 #include "runtime.hpp"
 #include "diagnostics.hpp"
+#include "backend.hpp"
 #include "d3d11_peripheral_dlaa.hpp"
 #include "eye_calibration.hpp"
 #include "gaze_foveation.hpp"
@@ -33,6 +34,23 @@
 
 namespace cheeky::foveated_dlss {
 namespace {
+std::string resource_cache_json() {
+    const auto cache = d3d12_resource_cache_status();
+    std::ostringstream out;
+    out << "{\"capacity\":" << cache.capacity << ",\"entries\":" << cache.entries
+        << ",\"reserved\":" << cache.reserved << ",\"exhaustions\":" << cache.exhaustions << '}';
+    return out.str();
+}
+std::string prepare_rejections_json() {
+    std::ostringstream out;
+    out << '{';
+    for (std::size_t i = 0; i < static_cast<std::size_t>(D3D12PrepareProbe::count); ++i) {
+        const auto probe = static_cast<D3D12PrepareProbe>(i);
+        out << (i ? ",\"" : "\"") << d3d12_prepare_probe_name(probe) << "\":" << d3d12_prepare_rejections(probe);
+    }
+    out << '}';
+    return out.str();
+}
 // Intentionally process-resident: workers and game detours never reference the
 // unloadable host adapter, nor call into Lua or UEVR.
 struct State {
@@ -101,6 +119,8 @@ std::string snapshot_locked(State& s) {
         << "\",\"settings\":" << settings_json(configured_settings())
         << ",\"setting_groups\":" << setting_groups_json()
         << ",\"d3d12_lower_hook_active\":" << d3d12_lower_hook_enabled()
+        << ",\"d3d12_resource_cache\":" << resource_cache_json()
+        << ",\"d3d12_prepare_rejections\":" << prepare_rejections_json()
         << ",\"d3d12_hook_restart_required\":" << d3d12_hook_restart_required(configured_settings().d3d12_lower_hook)
         << ",\"afw_experiment\":{\"enabled\":" << afw.enabled
         << ",\"core_calls\":" << afw.core_calls << ",\"lower_calls\":" << afw.lower_calls

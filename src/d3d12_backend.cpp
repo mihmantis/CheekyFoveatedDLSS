@@ -60,26 +60,6 @@ std::atomic<std::uint64_t> direct_preparation_sequence{};
 std::atomic<std::uint64_t> canonical_rejection_sequence{};
 std::atomic<std::uint64_t> canonical_failure_sequence{};
 
-enum class D3D12PrepareProbe : std::size_t {
-    disabled,
-    invalid_arguments,
-    missing_resources,
-    invalid_dimensions,
-    coordinated_crop,
-    get_device,
-    resource_arguments,
-    output_contract,
-    resource_allocation,
-    private_output,
-    descriptor_heap,
-    serialize_root_signature,
-    create_root_signature,
-    create_pipeline,
-    resources_unavailable,
-    evaluation_allocation,
-    count,
-};
-
 std::array<
     std::atomic<std::uint32_t>,
     static_cast<std::size_t>(D3D12PrepareProbe::count)
@@ -275,7 +255,11 @@ struct D3D12Resources {
 // Protected by calibration12_execution_mutex(), also used by queue/reset hooks.
 D3D12Resources* resource_list{};
 std::uint64_t resource_use_sequence{};
-constexpr std::size_t resource_cache_capacity = 8U;
+std::atomic<std::uint32_t> resource_cache_capacity_requested{32U};
+std::atomic<std::uint64_t> resource_cache_exhaustions{};
+// Set when this thread's prepare found every resource set reserved by a live
+// recording; the hook reports that frame as a cache exhaustion, not a rejection.
+thread_local bool resource_cache_exhausted{};
 
 
 
@@ -555,8 +539,10 @@ void collect_resources() noexcept {
     ID3D12Device* const device,
     ID3D12Resource* const game_output,
     const std::uint32_t output_width,
-    const std::uint32_t output_height
+    const std::uint32_t output_height,
+    const std::uint32_t capacity
 ) noexcept {
+    resource_cache_capacity_requested.store(capacity, std::memory_order_relaxed);
     // Fail closed before allocating or recording work without reliable tracking.
     if (!ensure_dlss_nr_recording(command_list)) return nullptr;
     const auto output_description = game_output->GetDesc();
@@ -588,8 +574,14 @@ void collect_resources() noexcept {
         if (current->lifetime.empty() && !current->active_evaluations &&
             (!oldest_link || current->last_used < (*oldest_link)->last_used)) oldest_link = link;
     }
-    if (count >= resource_cache_capacity) {
-        if (!oldest_link) return nullptr;
+    if (count >= capacity) {
+        if (!oldest_link) {
+            // Engines that record DLSS on many lists keep more recordings
+            // alive than sets exist. Count it so the UI can show the fallback.
+            resource_cache_exhaustions.fetch_add(1U, std::memory_order_relaxed);
+            resource_cache_exhausted = true;
+            return nullptr;
+        }
         auto* oldest = *oldest_link;
         *oldest_link = oldest->next;
         release_resources(oldest);
@@ -735,6 +727,7 @@ D3D12Evaluation* prepare_d3d12(
     const DlssViewId view_id,
     const Settings& settings
 ) noexcept {
+    resource_cache_exhausted = false;
     if (!settings.enabled) {
         skip_d3d12_history(view_id);
         diagnostic_note_state(
@@ -930,13 +923,15 @@ D3D12Evaluation* prepare_d3d12(
         device,
         output,
         reconstruction.output_width,
-        reconstruction.output_height
+        reconstruction.output_height,
+        settings.d3d12_resource_cache_capacity
     );
     if (resources == nullptr) {
         device->Release();
         diagnostic_note_state(
             DiagnosticApi::d3d12,
-            DiagnosticState::resource_initialization_failed
+            resource_cache_exhausted ? DiagnosticState::private_resources_exhausted
+                                     : DiagnosticState::resource_initialization_failed
         );
         if (should_trace_prepare_rejection(
                 D3D12PrepareProbe::resources_unavailable)) {
@@ -1148,6 +1143,7 @@ D3D12Evaluation* prepare_d3d12_streamline(
     const D3D12_RESOURCE_STATES color_state,
     const D3D12_RESOURCE_STATES output_state
 ) noexcept {
+    resource_cache_exhausted = false;
     if (!settings.enabled || command_list == nullptr || color == nullptr ||
         output == nullptr || color == output || render_width == 0U ||
         render_height == 0U || output_width == 0U || output_height == 0U ||
@@ -1200,13 +1196,15 @@ D3D12Evaluation* prepare_d3d12_streamline(
         device,
         output,
         reconstruction.output_width,
-        reconstruction.output_height
+        reconstruction.output_height,
+        settings.d3d12_resource_cache_capacity
     );
     if (resources == nullptr) {
         device->Release();
         diagnostic_note_state(
             DiagnosticApi::d3d12,
-            DiagnosticState::resource_initialization_failed
+            resource_cache_exhausted ? DiagnosticState::private_resources_exhausted
+                                     : DiagnosticState::resource_initialization_failed
         );
         return nullptr;
     }
@@ -1899,6 +1897,53 @@ void release_d3d12_resources() noexcept {
     }
     collect_resources();
 
+}
+
+const char* d3d12_prepare_probe_name(const D3D12PrepareProbe probe) noexcept {
+    switch (probe) {
+    case D3D12PrepareProbe::disabled: return "disabled";
+    case D3D12PrepareProbe::invalid_arguments: return "invalid_arguments";
+    case D3D12PrepareProbe::missing_resources: return "missing_resources";
+    case D3D12PrepareProbe::invalid_dimensions: return "invalid_dimensions";
+    case D3D12PrepareProbe::coordinated_crop: return "coordinated_crop";
+    case D3D12PrepareProbe::get_device: return "get_device";
+    case D3D12PrepareProbe::resource_arguments: return "resource_arguments";
+    case D3D12PrepareProbe::output_contract: return "output_contract";
+    case D3D12PrepareProbe::resource_allocation: return "resource_allocation";
+    case D3D12PrepareProbe::private_output: return "private_output";
+    case D3D12PrepareProbe::descriptor_heap: return "descriptor_heap";
+    case D3D12PrepareProbe::serialize_root_signature: return "serialize_root_signature";
+    case D3D12PrepareProbe::create_root_signature: return "create_root_signature";
+    case D3D12PrepareProbe::create_pipeline: return "create_pipeline";
+    case D3D12PrepareProbe::resources_unavailable: return "resources_unavailable";
+    case D3D12PrepareProbe::evaluation_allocation: return "evaluation_allocation";
+    case D3D12PrepareProbe::count: break;
+    }
+    return "unknown";
+}
+
+std::uint32_t d3d12_prepare_rejections(const D3D12PrepareProbe probe) noexcept {
+    const auto index = static_cast<std::size_t>(probe);
+    if (index >= d3d12_prepare_probe_counts.size()) return 0U;
+    return d3d12_prepare_probe_counts[index].load(std::memory_order_relaxed);
+}
+
+D3D12ResourceCacheStatus d3d12_resource_cache_status() noexcept {
+    D3D12ResourceCacheStatus status{};
+    status.capacity = resource_cache_capacity_requested.load(std::memory_order_relaxed);
+    status.exhaustions = resource_cache_exhaustions.load(std::memory_order_relaxed);
+    std::lock_guard execution_lock(calibration12_execution_mutex());
+    for (auto* current = resource_list; current != nullptr; current = current->next) {
+        ++status.entries;
+        if (!current->lifetime.empty() || current->active_evaluations != 0U) ++status.reserved;
+    }
+    return status;
+}
+
+bool d3d12_take_resource_cache_exhaustion() noexcept {
+    const bool exhausted = resource_cache_exhausted;
+    resource_cache_exhausted = false;
+    return exhausted;
 }
 
 }  // namespace cheeky::foveated_dlss

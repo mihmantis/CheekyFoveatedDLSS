@@ -73,6 +73,7 @@ Additional checks:
 ```powershell
 ./bin/Release/CheekyUEVRTests.exe --hardware
 ./bin/Release/CheekyTests.exe --d3d12-composite
+./bin/Release/CheekyTests.exe --d3d12-resource-cache
 ./bin/Release/CheekyTests.exe --motion-resample
 python tests/uevr_menu_tests.py
 ```

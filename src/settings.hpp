@@ -40,6 +40,11 @@ inline const char* nr_processing_order_name(NrProcessingOrder order) noexcept {
 struct Settings {
     bool enabled{true};
     bool d3d12_lower_hook{true}; // Applied at interception startup; changes require a restart.
+    // Private D3D12 resource sets, one crop-sized scratch DLSS output each. A set
+    // stays reserved by the command-list recording that used it until that list
+    // is reset and GPU-complete, so engines that rotate many lists need more sets
+    // or their evaluations fall back to the game's DLSS.
+    std::uint32_t d3d12_resource_cache_capacity{32U};
     bool d3d11_use_d3d12_transport{false};
     bool peripheral_dlaa_enabled{true};
     float peripheral_dlaa_scale{0.75F};

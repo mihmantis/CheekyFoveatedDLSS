@@ -437,6 +437,14 @@ uevr.lua.add_script_panel("Cheeky Foveated DLSS", function()
             text("Active DLSS hook: " .. (status.d3d12_lower_hook_active and "Lower" or "Higher"))
             if status.d3d12_hook_restart_required then text("DLSS hook change saved for next game restart.") end
         end
+        if draft.D3D12ResourceCacheCapacity ~= nil then
+            slider("DX12 private resource sets", "D3D12ResourceCacheCapacity", 8, 64, true)
+            text("Each set holds one crop-sized DLSS output; raise it when the cache reports full.")
+            local cache = status.d3d12_resource_cache
+            if cache and cache.exhaustions and cache.exhaustions > 0 then
+                text(string.format("Private resource cache full %d times; those frames used game DLSS.", cache.exhaustions))
+            end
+        end
         check("Enable foveated DLSS-SR", "Enabled")
         if draft.Enabled then
             section("Center")

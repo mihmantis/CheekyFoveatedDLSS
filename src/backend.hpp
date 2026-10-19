@@ -6,6 +6,9 @@
 #include "settings.hpp"
 #include "dlss_nr.hpp"
 
+#include <cstddef>
+#include <cstdint>
+
 namespace cheeky::foveated_dlss {
 
 struct D3D11Evaluation;
@@ -158,5 +161,44 @@ void finish_d3d12_streamline(
 void release_d3d11_resources() noexcept;
 void collect_d3d12_resources() noexcept;
 void release_d3d12_resources() noexcept;
+
+// Reasons prepare_d3d12/prepare_d3d12_streamline leave an evaluation to the
+// game's DLSS. Counts accumulate since startup; the first two of each reason
+// are also traced.
+enum class D3D12PrepareProbe : std::size_t {
+    disabled,
+    invalid_arguments,
+    missing_resources,
+    invalid_dimensions,
+    coordinated_crop,
+    get_device,
+    resource_arguments,
+    output_contract,
+    resource_allocation,
+    private_output,
+    descriptor_heap,
+    serialize_root_signature,
+    create_root_signature,
+    create_pipeline,
+    resources_unavailable,
+    evaluation_allocation,
+    count,
+};
+[[nodiscard]] const char* d3d12_prepare_probe_name(D3D12PrepareProbe probe) noexcept;
+[[nodiscard]] std::uint32_t d3d12_prepare_rejections(D3D12PrepareProbe probe) noexcept;
+
+// Private D3D12 resource sets hold one crop-sized scratch DLSS output each and
+// stay reserved by the command-list recording that used them until that list
+// is reset and GPU-complete. When every set is reserved, the evaluation falls
+// back to the game's DLSS and counts as an exhaustion.
+struct D3D12ResourceCacheStatus {
+    std::uint32_t capacity{};
+    std::uint32_t entries{};
+    std::uint32_t reserved{};
+    std::uint64_t exhaustions{};
+};
+[[nodiscard]] D3D12ResourceCacheStatus d3d12_resource_cache_status() noexcept;
+// True once after a prepare on the calling thread was rejected by a full cache.
+[[nodiscard]] bool d3d12_take_resource_cache_exhaustion() noexcept;
 
 }  // namespace cheeky::foveated_dlss

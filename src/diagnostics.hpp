@@ -52,6 +52,7 @@ enum class DiagnosticState : std::uint32_t {
     ngx_evaluation_failed,
     late_attach_incomplete,
     streamline_waiting_for_ngx,
+    private_resources_exhausted,
 };
 
 enum class D3D11ExecutionPath : std::uint32_t {

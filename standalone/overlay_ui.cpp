@@ -8,6 +8,7 @@
 #include <cfloat>
 #include <charconv>
 #include <cmath>
+#include <cstdio>
 #include <locale>
 #include <sstream>
 #include <string_view>
@@ -625,6 +626,24 @@ void draw_sr_performance(std::string_view snapshot, const Settings& s) {
                 }
             }
             savings_line(api, "native_ms", "foveated_ms");
+            if (i) {
+                const auto cache = member(snapshot, "d3d12_resource_cache");
+                if (!cache.empty()) {
+                    ImGui::SeparatorText("Private resources");
+                    ImGui::TextWrapped("Resource sets: %.0f of %.0f allocated, %.0f reserved by live command lists",
+                        number(cache, "entries"), number(cache, "capacity"), number(cache, "reserved"));
+                    const auto exhaustions = number(cache, "exhaustions");
+                    const auto evaluations = number(api, "evaluations"), active_calls = number(api, "active");
+                    if (exhaustions > 0) {
+                        char text[256]{};
+                        snprintf(text, sizeof(text), "Cache full %.0f times: those frames used the game's DLSS (%.0f of %.0f evaluations foveated). Raise DX12 private resource sets in General.",
+                            exhaustions, active_calls, evaluations);
+                        warning(text);
+                    } else if (evaluations > 0) {
+                        ImGui::TextWrapped("Foveated evaluations: %.0f of %.0f", active_calls, evaluations);
+                    }
+                }
+            }
             if (!i) {
                 diagnostic_line(api, "Execution path", "execution_path");
                 if (s.d3d11_use_d3d12_transport) {
@@ -788,6 +807,11 @@ void draw_overlay_ui(OverlayUiState& r,const OverlayRuntime& runtime,InputState&
                     ImGui::Checkbox("Use lower DLSS hook (DX12)", &r.draft.d3d12_lower_hook);
                     test_control("D3D12LowerHook");
                     ImGui::TextWrapped("Off selects the higher call. Restart the game after changing this.");
+                    int resource_sets = static_cast<int>(r.draft.d3d12_resource_cache_capacity);
+                    if (ImGui::SliderInt("DX12 private resource sets", &resource_sets, 8, 64, "%d sets", ImGuiSliderFlags_AlwaysClamp))
+                        r.draft.d3d12_resource_cache_capacity = static_cast<std::uint32_t>(resource_sets);
+                    test_control("D3D12ResourceCacheCapacity");
+                    ImGui::TextWrapped("Each set holds one crop-sized DLSS output and stays reserved until its command list is reset. Raise it when the DLSS-SR tab reports the private resource cache full; each set costs VRAM.");
                 }
                 ImGui::SeparatorText("Status");
                 ImGui::Text("Host: %s", runtime.host_name ? runtime.host_name : "Standalone");
