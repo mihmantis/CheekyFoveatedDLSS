@@ -2,6 +2,7 @@
 #include "afw_compatibility.hpp"
 #include "gaze_foveation.hpp"
 #include "crop_motion.hpp"
+#include "dlss_nr_lifetime.hpp"
 #include "mock_ngx_parameters.hpp"
 #include <dxgi1_4.h>
 #include <wrl/client.h>
@@ -286,6 +287,11 @@ namespace {
 // A set stays reserved until its list is reset, which this fixture controls.
 void run_resource_cache(unsigned capacity, unsigned list_count) {
     reset_gaze_foveation();
+    // Declared first so it runs last: a failed assertion must not leave pinned
+    // sets or gaze state behind for the next fixture.
+    struct Teardown {
+        ~Teardown() { release_d3d12_resources(); reset_gaze_foveation(); }
+    } teardown;
     ComPtr<IDXGIFactory4> factory; check(CreateDXGIFactory1(IID_PPV_ARGS(&factory)));
     ComPtr<IDXGIAdapter> adapter; check(factory->EnumWarpAdapter(IID_PPV_ARGS(&adapter)));
     ComPtr<ID3D12Device> device; check(D3D12CreateDevice(adapter.Get(), D3D_FEATURE_LEVEL_11_0, IID_PPV_ARGS(&device)));
@@ -344,10 +350,13 @@ void run_resource_cache(unsigned capacity, unsigned list_count) {
         "Resource cache status does not describe the allocated and reserved sets");
     require(status.exhaustions - before == rejected, "Exhaustion counter does not match the rejected evaluations");
     // Resetting the lists retires their recordings; the next list reuses a set.
+    // This fixture has no observer hooks, so retire each recording explicitly,
+    // as the observer's Reset hook does in a game (see the safety fixture).
     for (unsigned i = 0; i < list_count; ++i) {
         check(lists[i]->Close());
         check(allocators[i]->Reset());
         check(lists[i]->Reset(allocators[i].Get(), nullptr));
+        nr_recording_reset(lists[i].Get(), S_OK);
     }
     auto* evaluation = prepare_d3d12(lists[list_count].Get(), &parameters, 1001U, settings);
     require(evaluation != nullptr, "A reset command list did not release its private resource set");
@@ -357,6 +366,7 @@ void run_resource_cache(unsigned capacity, unsigned list_count) {
     check(lists[list_count]->Close());
     check(allocators[list_count]->Reset());
     check(lists[list_count]->Reset(allocators[list_count].Get(), nullptr));
+    nr_recording_reset(lists[list_count].Get(), S_OK);
     for (auto& list : lists) list.Reset();
     for (auto& allocator : allocators) allocator.Reset();
     release_d3d12_resources(); reset_gaze_foveation();
