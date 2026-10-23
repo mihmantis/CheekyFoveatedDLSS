@@ -602,6 +602,87 @@ void verify_nr_reset_isolation(void (*command)(const char*), bool lower_hook) {
         require(unchanged, "SDR NR round trip changed paper white, alpha, or working-scale edge sampling");
     }
     command("1\n96\nset\nNrPaperWhiteScale=1\nNrWorkingScale=1\nNrHdrTransferStrength=1"); evaluate(0);
+    if (!f.use_sl) {
+        // HDR DLSS input is scene-referred. GTA V Enhanced passes linear color
+        // with pre-exposure 1 and a 1x1 exposure texture, so the codec must
+        // divide by the game's exposure each frame. A fixed paper white clips
+        // daylight in every channel and the luminance restore returns grey.
+        // The Streamline route captures create flags once per game feature, so
+        // the HDR flag is exercised through the native NGX parameters here.
+        D3D12_RESOURCE_DESC exposure_desc{};
+        exposure_desc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+        exposure_desc.Width = exposure_desc.Height = 1; exposure_desc.DepthOrArraySize = exposure_desc.MipLevels = 1;
+        exposure_desc.Format = DXGI_FORMAT_R32G32_FLOAT; exposure_desc.SampleDesc.Count = 1;
+        D3D12_HEAP_PROPERTIES default_heap{}; default_heap.Type = D3D12_HEAP_TYPE_DEFAULT;
+        ComPtr<ID3D12Resource> exposure;
+        check(f.device->CreateCommittedResource(&default_heap,D3D12_HEAP_FLAG_NONE,&exposure_desc,D3D12_RESOURCE_STATE_COPY_DEST,nullptr,IID_PPV_ARGS(&exposure)),"NR exposure texture");
+        auto exposure_upload = make_buffer(256,D3D12_HEAP_TYPE_UPLOAD);
+        check(exposure_upload->Map(0,nullptr,&mapped),"Map NR exposure");
+        static_cast<float*>(mapped)[0] = 0.125F; static_cast<float*>(mapped)[1] = 999.F; // Only red carries exposure.
+        exposure_upload->Unmap(0,nullptr);
+        D3D12_TEXTURE_COPY_LOCATION exposure_src{}, exposure_dst{};
+        exposure_src.pResource = exposure_upload.Get(); exposure_src.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
+        exposure_src.PlacedFootprint.Footprint = {DXGI_FORMAT_R32G32_FLOAT,1,1,1,256};
+        exposure_dst.pResource = exposure.Get(); exposure_dst.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+        f.list->CopyTextureRegion(&exposure_dst,0,0,0,&exposure_src,nullptr);
+        transition_resource(exposure.Get(),D3D12_RESOURCE_STATE_COPY_DEST,D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+        // Every channel above paper white 1.0, as a sunlit GTA frame is.
+        check(color_upload->Map(0,nullptr,&mapped),"Map NR HDR color");
+        for (unsigned y = 0; y < color_desc.Height; ++y) {
+            auto* row = reinterpret_cast<DirectX::PackedVector::HALF*>(static_cast<std::byte*>(mapped) + color_fp.Offset + y*color_fp.Footprint.RowPitch);
+            for (unsigned x = 0; x < color_desc.Width; ++x) {
+                row[4*x] = DirectX::PackedVector::XMConvertFloatToHalf(4.F);
+                row[4*x+1] = DirectX::PackedVector::XMConvertFloatToHalf(3.F);
+                row[4*x+2] = DirectX::PackedVector::XMConvertFloatToHalf(2.F);
+                row[4*x+3] = DirectX::PackedVector::XMConvertFloatToHalf(1.F);
+            }
+        }
+        color_upload->Unmap(0,nullptr);
+        transition_resource(color_dst.pResource,D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,D3D12_RESOURCE_STATE_COPY_DEST);
+        f.list->CopyTextureRegion(&color_dst,0,0,0,&color_src,nullptr);
+        transition_resource(color_dst.pResource,D3D12_RESOURCE_STATE_COPY_DEST,D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+        f.params.Set("DLSS.Feature.Create.Flags", 3U); // IsHDR | MVLowRes, as GTA V Enhanced creates DLSS.
+        f.params.Set("ExposureTexture", exposure.Get());
+        f.params.Set("DLSS.Pre.Exposure", 1.F); f.params.Set("DLSS.Exposure.Scale", 1.F);
+        const auto read_hdr_pixel = [&](float (&out)[4]) {
+            require(sr_inputs.size() == 1 && sr_inputs[0].color != f.textures12[0].Get(), "HDR round trip did not execute NR");
+            auto readback = make_buffer(256,D3D12_HEAP_TYPE_READBACK);
+            D3D12_TEXTURE_COPY_LOCATION from{}, to{};
+            from.pResource = sr_inputs[0].color; from.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+            to.pResource = readback.Get(); to.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
+            to.PlacedFootprint.Footprint = {DXGI_FORMAT_R16G16B16A16_FLOAT,1,1,1,256};
+            const D3D12_BOX pixel{0,0,0,1,1,1};
+            transition_resource(from.pResource,D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,D3D12_RESOURCE_STATE_COPY_SOURCE);
+            f.list->CopyTextureRegion(&to,0,0,0,&from,&pixel);
+            transition_resource(from.pResource,D3D12_RESOURCE_STATE_COPY_SOURCE,D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+            f.finish_gpu(); check(readback->Map(0,nullptr,&mapped), "Map NR HDR result");
+            const auto* half = static_cast<const DirectX::PackedVector::HALF*>(mapped);
+            for (unsigned c = 0; c < 4; ++c) out[c] = DirectX::PackedVector::XMConvertHalfToFloat(half[c]);
+            readback->Unmap(0,nullptr);
+        };
+        const auto close_to = [](float actual, float expected) { return std::abs(actual - expected) <= 0.02F * expected; };
+        const float grey = 0.2126F*4.F + 0.7152F*3.F + 0.0722F*2.F;
+        for (float white : {1.F, 2.F}) for (bool game_exposure : {true, false}) {
+            command((std::string("1\n96\nset\nNrGameExposure=") + (game_exposure ? "true" : "false") +
+                "\nNrPaperWhiteScale=" + std::to_string(white)).c_str()); evaluate(0);
+            float rgba[4]{}; read_hdr_pixel(rgba);
+            require(rgba[3] == 1.F, "HDR NR round trip changed alpha");
+            if (game_exposure)
+                require(close_to(rgba[0],4.F) && close_to(rgba[1],3.F) && close_to(rgba[2],2.F),
+                    "Game exposure did not carry an over-range color through NR unchanged (stale src/d3d_shaders.hpp? rerun scripts/build-d3d-shaders.py)");
+            else
+                require(close_to(rgba[0],grey) && close_to(rgba[1],grey) && close_to(rgba[2],grey),
+                    "Fixed paper white must clip an over-range color to its grey luminance");
+        }
+        f.params.values.erase("ExposureTexture");
+        command("1\n96\nset\nNrGameExposure=true\nNrPaperWhiteScale=1"); evaluate(0);
+        float rgba[4]{}; read_hdr_pixel(rgba);
+        require(close_to(rgba[0],grey) && close_to(rgba[1],grey) && close_to(rgba[2],grey),
+            "Without an exposure texture NR must fall back to the fixed paper white");
+        f.params.values.erase("DLSS.Pre.Exposure"); f.params.values.erase("DLSS.Exposure.Scale");
+        f.params.Set("DLSS.Feature.Create.Flags", 2U);
+        puts("PASS NR HDR round trip follows the game's exposure texture and falls back to paper white");
+    }
     copy_nr_color(false);
     // Exercise the production feature cache through the fake NVIDIA runtime:
     // warm two toggle states, then churn dimensions without growing live features.

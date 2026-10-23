@@ -2979,6 +2979,14 @@ bool streamline_nr_frame(ID3D12GraphicsCommandList* command_list,
     };
     frame.motion_state = static_cast<D3D12_RESOURCE_STATES>(motion.resource->state);
     frame.depth_state = static_cast<D3D12_RESOURCE_STATES>(depth.resource->state);
+    // The evaluate hook scopes the viewport's exposure tag (13) for HDR color;
+    // the NR codec divides by it like the SR markers do (nr_exposure.hpp).
+    if (debug_exposure_supported(debug_exposure)) {
+        frame.exposure = debug_exposure.texture;
+        frame.exposure_state = debug_exposure.state;
+        frame.pre_exposure = debug_exposure.pre;
+        frame.exposure_scale = debug_exposure.scale;
+    }
     frame.jitter_uv_x = dlss_nr_ngx_motion_uv_scale(evaluation.nr_constants.jitter_offset.x, input_width);
     frame.jitter_uv_y = dlss_nr_ngx_motion_uv_scale(evaluation.nr_constants.jitter_offset.y, input_height);
     frame.motion_vectors_jittered = evaluation.nr_constants.motion_vectors_jittered != 0;
@@ -4657,6 +4665,19 @@ NgxResult hook_core_create_d3d12(
     frame.jitter_uv_y = dlss_nr_ngx_motion_uv_scale(get_d3d12_parameter_float(parameters, "Jitter.Offset.Y", 0.0F), input_height);
     frame.motion_vectors_jittered = (flags & (1U << 2U)) != 0U;
     frame.view_output_base_x = frame.color_base_x; frame.view_output_base_y = frame.color_base_y;
+    // Scene-referred HDR games (GTA V Enhanced) pass a 1x1 exposure texture with
+    // pre-exposure 1. The NR codec divides by it (nr_exposure.hpp); NGX inputs
+    // are readable by compute, matching the depth and motion state defaults.
+    frame.exposure = get_d3d12_parameter_resource(parameters, "ExposureTexture");
+    frame.pre_exposure = get_d3d12_parameter_float(parameters, "DLSS.Pre.Exposure", 1.0F);
+    frame.exposure_scale = get_d3d12_parameter_float(parameters, "DLSS.Exposure.Scale", 1.0F);
+    if (frame.exposure == nullptr && debug_exposure_supported(debug_exposure)) {
+        // Nested inside a Streamline evaluate whose tags carried the exposure.
+        frame.exposure = debug_exposure.texture;
+        frame.exposure_state = debug_exposure.state;
+        frame.pre_exposure = debug_exposure.pre;
+        frame.exposure_scale = debug_exposure.scale;
+    }
     return frame;
 }
 

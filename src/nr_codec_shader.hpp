@@ -17,7 +17,12 @@ struct CodecConstants {
         float foveation_roundness;
         float foveation_feather;
         std::uint32_t show_alignment_border;
-        std::uint32_t mask_count, padding[2];
+        std::uint32_t mask_count;
+        // Game exposure (nr_exposure.hpp): decode mode of the private exposure
+        // copy bound at t3 on D3D12 and pre_exposure / exposure_scale. Mode zero
+        // keeps the fixed paper white; the Vulkan codec always passes zero.
+        std::uint32_t exposure_mode;
+        float exposure_multiplier;
         float mask_bounds[4][4];
     };
     static_assert(sizeof(CodecConstants) == 40U * sizeof(std::uint32_t));
@@ -25,6 +30,10 @@ inline constexpr char nr_codec_shader[] = R"(
 Texture2D<float4> Source0 : register(t0);
 Texture2D<float4> Source1 : register(t1);
 Texture2D<float4> Source2 : register(t2);
+#ifdef CHEEKY_NR_EXPOSURE_BUFFER
+// Private copy of the game's 1x1 exposure texture (D3D12 root SRV).
+ByteAddressBuffer Exposure : register(t3);
+#endif
 RWTexture2D<float4> Output0 : register(u0);
 RWTexture2D<float4> Output1 : register(u1);
 
@@ -45,9 +54,27 @@ cbuffer CodecConstants : register(b0) {
     float FoveationFeather;
     uint ShowAlignmentBorder;
     uint MaskCount;
-    uint2 MaskPadding;
+    uint ExposureMode;
+    float ExposureMultiplier;
     float4 MaskBounds[4];
 };
+
+// Scene value mapped to paper white: the slider, scaled by the game's exposure
+// (pre_exposure / (exposure * scale)) when a usable exposure copy is bound.
+// Without it, scene-referred HDR input clips in every channel above the slider
+// and the decode's luminance restore can only return grey.
+float PaperWhite() {
+    float white = max(PaperWhiteScale, 0.0001);
+#ifdef CHEEKY_NR_EXPOSURE_BUFFER
+    if (ExposureMode != 0) {
+        const uint raw = Exposure.Load(0);
+        const float exposure = ExposureMode == 2 ? f16tof32(raw & 0xFFFF) : asfloat(raw);
+        if (isfinite(exposure) && exposure > 0.0)
+            white *= clamp(ExposureMultiplier / exposure, 0.000001, 65504.0);
+    }
+#endif
+    return white;
+}
 
 float FoveationShapeDistance(float2 pixel) {
     if (MaskCount != 0) {
@@ -180,10 +207,7 @@ void EncodeMain(uint3 dispatch_id : SV_DispatchThreadID) {
             SourceBase,
             SourceSize
         );
-        const float3 linear_color = max(
-            proxy_source.rgb / max(PaperWhiteScale, 0.0001),
-            0.0
-        );
+        const float3 linear_color = max(proxy_source.rgb / PaperWhite(), 0.0);
         const float3 encoded = HdrMode != 0 ? SrgbEncode(linear_color) : proxy_source.rgb;
         Output1[dispatch_id.xy] = float4(encoded, proxy_source.a);
     }
@@ -244,14 +268,12 @@ void DecodeMain(uint3 dispatch_id : SV_DispatchThreadID) {
         Output0[SourceBase + dispatch_id.xy] = lerp(original_sample, processed, foveation_weight);
         return;
     }
-    const float3 original = max(
-        original_sample.rgb / max(PaperWhiteScale, 0.0001),
-        0.0
-    );
+    const float white = PaperWhite();
+    const float3 original = max(original_sample.rgb / white, 0.0);
     const float3 proxy = SrgbDecode(proxy_sample.rgb);
     const float3 neural = SrgbDecode(neural_sample.rgb);
     const float3 upgraded = UpgradeToneMap(original, proxy, neural);
-    const float3 decoded = lerp(original, upgraded, ColorStrength) * PaperWhiteScale;
+    const float3 decoded = lerp(original, upgraded, ColorStrength) * white;
     const float4 processed = float4(max(decoded, 0.0), original_sample.a);
     Output0[SourceBase + dispatch_id.xy] = lerp(original_sample, processed, foveation_weight);
 }

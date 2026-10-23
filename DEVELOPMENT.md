@@ -63,6 +63,9 @@ python scripts/build-d3d-shaders.py --fxc 'C:\Program Files (x86)\Windows Kits\1
 ```
 
 Add `--check` to verify that the checked-in bytecode matches its sources.
+The DLSS-NR codec entries compile with `CHEEKY_NR_EXPOSURE_BUFFER`, which
+binds the game exposure copy as a root SRV; the Vulkan SPIR-V build of the
+same source omits the define and keeps the fixed paper white.
 
 ## Tests
 
@@ -74,6 +77,7 @@ Additional checks:
 ./bin/Release/CheekyUEVRTests.exe --hardware
 ./bin/Release/CheekyTests.exe --d3d12-composite
 ./bin/Release/CheekyTests.exe --d3d12-resource-cache
+./bin/Release/CheekyTests.exe --nr-exposure
 ./bin/Release/CheekyTests.exe --motion-resample
 python tests/uevr_menu_tests.py
 ```

@@ -3,6 +3,7 @@
 #include "eye_calibration_d3d12.hpp"
 #include "dlss_nr.hpp"
 #include "nr_codec_shader.hpp"
+#include "nr_exposure.hpp"
 #include "d3d_shaders.hpp"
 #include "nr_parameters.hpp"
 #include "nr_runtime_module.hpp"
@@ -132,6 +133,9 @@ struct GpuResources {
     ID3D12Resource* original_output{};
     ID3D12Resource* color_proxy{};
     ID3D12Resource* neural_output{};
+    // Private copy of the game's 1x1 exposure texture, bound as a root SRV so
+    // rotating game exposure resources never rewrite a heap descriptor.
+    ID3D12Resource* exposure_buffer{};
     ID3D12DescriptorHeap* descriptors{};
     ID3D12RootSignature* root_signature{};
     ID3D12PipelineState* encode_pipeline{};
@@ -186,6 +190,9 @@ DlssNrSnapshot diagnostics;
 constexpr std::size_t retired_feature_capacity = 1U;
 // Two configurations across three rotating private input textures per eye.
 constexpr std::size_t gpu_resource_cache_capacity = 6U;
+// One texture row of the exposure copy: texture-to-buffer copies need a
+// 256-byte row pitch, and the widest accepted exposure texel is 16 bytes.
+constexpr std::uint32_t nr_exposure_buffer_bytes = D3D12_TEXTURE_DATA_PITCH_ALIGNMENT;
 
 void release_gpu(GpuResources& gpu) noexcept {
     release(gpu.border_pipeline);
@@ -193,6 +200,7 @@ void release_gpu(GpuResources& gpu) noexcept {
     release(gpu.encode_pipeline);
     release(gpu.root_signature);
     release(gpu.descriptors);
+    release(gpu.exposure_buffer);
     release(gpu.neural_output);
     release(gpu.color_proxy);
     release(gpu.original_output);
@@ -610,6 +618,26 @@ void evict_retired_features(ViewState& view) noexcept {
         gpu.original_output->SetName(L"Cheeky DLSS-NR original HDR output");
         gpu.color_proxy->SetName(L"Cheeky DLSS-NR color proxy");
         gpu.neural_output->SetName(L"Cheeky DLSS-NR neural output");
+        D3D12_RESOURCE_DESC exposure_buffer{};
+        exposure_buffer.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+        exposure_buffer.Width = nr_exposure_buffer_bytes;
+        exposure_buffer.Height = 1U;
+        exposure_buffer.DepthOrArraySize = 1U;
+        exposure_buffer.MipLevels = 1U;
+        exposure_buffer.SampleDesc.Count = 1U;
+        exposure_buffer.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+        // Starts and ends every recording in COMMON so replayed lists see the
+        // same state sequence: copy destination, then shader resource.
+        result = device->CreateCommittedResource(
+            &heap,
+            D3D12_HEAP_FLAG_NONE,
+            &exposure_buffer,
+            D3D12_RESOURCE_STATE_COMMON,
+            nullptr,
+            IID_PPV_ARGS(&gpu.exposure_buffer)
+        );
+        if (FAILED(result)) return fail("CreateCommittedResource(exposure)", result);
+        gpu.exposure_buffer->SetName(L"Cheeky DLSS-NR exposure copy");
     }
 
     D3D12_DESCRIPTOR_HEAP_DESC descriptor_heap{};
@@ -681,7 +709,7 @@ void evict_retired_features(ViewState& view) noexcept {
     ranges[1].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
     ranges[1].NumDescriptors = 2U;
     ranges[1].BaseShaderRegister = 0U;
-    D3D12_ROOT_PARAMETER root_parameters[3]{};
+    D3D12_ROOT_PARAMETER root_parameters[4]{};
     root_parameters[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
     root_parameters[0].DescriptorTable.NumDescriptorRanges = 1U;
     root_parameters[0].DescriptorTable.pDescriptorRanges = &ranges[0];
@@ -691,8 +719,13 @@ void evict_retired_features(ViewState& view) noexcept {
     root_parameters[2].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
     root_parameters[2].Constants.ShaderRegister = 0U;
     root_parameters[2].Constants.Num32BitValues = 40U;
+    // The exposure copy (t3). Encode and decode read it only when the
+    // constants' exposure mode is set; the border shader never binds it.
+    root_parameters[3].ParameterType = D3D12_ROOT_PARAMETER_TYPE_SRV;
+    root_parameters[3].Descriptor.ShaderRegister = 3U;
+    root_parameters[3].Descriptor.RegisterSpace = 0U;
     D3D12_ROOT_SIGNATURE_DESC root_desc{};
-    root_desc.NumParameters = 3U;
+    root_desc.NumParameters = 4U;
     root_desc.pParameters = root_parameters;
     result = D3D12SerializeRootSignature(
         &root_desc,
@@ -873,7 +906,8 @@ void dispatch_codec(
     const std::uint32_t source_descriptor,
     const std::uint32_t destination_descriptor,
     const Settings& settings,
-    const NrRegion& region
+    const NrRegion& region,
+    const NrExposureBinding& exposure = {}
 ) noexcept {
     ID3D12DescriptorHeap* heaps[]{gpu.descriptors};
     frame.command_list->SetDescriptorHeaps(1U, heaps);
@@ -887,6 +921,12 @@ void dispatch_codec(
     handle.ptr += static_cast<std::uint64_t>(destination_descriptor) *
         gpu.descriptor_size;
     frame.command_list->SetComputeRootDescriptorTable(1U, handle);
+    // Encode and decode declare the exposure copy even when the mode is zero;
+    // the root descriptor must therefore always point at the private buffer.
+    if (gpu.exposure_buffer != nullptr) {
+        frame.command_list->SetComputeRootShaderResourceView(
+            3U, gpu.exposure_buffer->GetGPUVirtualAddress());
+    }
     const auto width = gpu.border_only ? region.width : gpu.width;
     const auto height = gpu.border_only ? region.height : gpu.height;
     CodecConstants constants{
@@ -905,7 +945,7 @@ void dispatch_codec(
         region.roundness,
         region.transition,
         settings.nr_alignment_border_enabled ? 1U : 0U,
-        region.mask.count, {}, {},
+        region.mask.count, exposure.mode, exposure.multiplier,
     };
     std::memcpy(constants.mask_bounds, region.mask.bounds, sizeof(constants.mask_bounds));
     frame.command_list->SetComputeRoot32BitConstants(2U, 40U, &constants, 0U);
@@ -1236,6 +1276,45 @@ bool evaluate_dlss_nr(
             frame.has_center ? "yes" : "no", frame.center.u, frame.center.v);
     }
 
+    // HDR DLSS input is scene-referred. Copy the game's 1x1 exposure texture
+    // into the set's private buffer so both codec passes divide by the same
+    // per-frame white (nr_exposure.hpp) instead of clipping at the slider.
+    const bool hdr_input = (frame.create_flags & 1U) != 0U;
+    const auto exposure_desc = frame.exposure != nullptr ? frame.exposure->GetDesc() : D3D12_RESOURCE_DESC{};
+    const bool exposure_texture = frame.exposure != nullptr &&
+        exposure_desc.Dimension == D3D12_RESOURCE_DIMENSION_TEXTURE2D &&
+        exposure_desc.DepthOrArraySize == 1U && exposure_desc.SampleDesc.Count == 1U &&
+        frame.exposure_state != static_cast<D3D12_RESOURCE_STATES>(0xFFFFFFFFU);
+    const auto exposure = resolve_nr_exposure(hdr_input, settings.nr_use_game_exposure, exposure_texture,
+        static_cast<std::uint32_t>(exposure_desc.Format), exposure_desc.Width, exposure_desc.Height,
+        frame.pre_exposure, frame.exposure_scale);
+    diagnostics.exposure_source = static_cast<std::uint32_t>(
+        !hdr_input ? DlssNrExposureSource::none
+        : exposure.mode != 0U ? DlssNrExposureSource::game
+        : settings.nr_use_game_exposure ? DlssNrExposureSource::unavailable
+        : DlssNrExposureSource::disabled);
+    diagnostics.exposure_format = exposure.mode != 0U ? static_cast<std::uint32_t>(exposure_desc.Format) : 0U;
+    if (exposure.mode != 0U) {
+        transition(frame.command_list, frame.exposure, frame.exposure_state, D3D12_RESOURCE_STATE_COPY_SOURCE);
+        transition(frame.command_list, gpu->exposure_buffer, D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_COPY_DEST);
+        D3D12_TEXTURE_COPY_LOCATION exposure_source{};
+        exposure_source.pResource = frame.exposure;
+        exposure_source.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+        exposure_source.SubresourceIndex = 0U;
+        D3D12_TEXTURE_COPY_LOCATION exposure_destination{};
+        exposure_destination.pResource = gpu->exposure_buffer;
+        exposure_destination.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
+        exposure_destination.PlacedFootprint.Offset = 0U;
+        exposure_destination.PlacedFootprint.Footprint = {exposure_desc.Format, 1U, 1U, 1U, nr_exposure_buffer_bytes};
+        frame.command_list->CopyTextureRegion(&exposure_destination, 0U, 0U, 0U, &exposure_source, nullptr);
+        transition(frame.command_list, gpu->exposure_buffer, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+        transition(frame.command_list, frame.exposure, D3D12_RESOURCE_STATE_COPY_SOURCE, frame.exposure_state);
+    }
+    const auto release_exposure_copy = [&]() noexcept {
+        if (exposure.mode != 0U)
+            transition(frame.command_list, gpu->exposure_buffer, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_COMMON);
+    };
+
     uav_barrier(frame.command_list, frame.color);
     transition(
         frame.command_list,
@@ -1250,7 +1329,8 @@ bool evaluate_dlss_nr(
         0U,
         4U,
         settings,
-        codec_region
+        codec_region,
+        exposure
     );
     uav_barrier(frame.command_list, gpu->original_output);
     uav_barrier(frame.command_list, gpu->color_proxy);
@@ -1343,6 +1423,7 @@ bool evaluate_dlss_nr(
             D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
             frame.color_state
         );
+        release_exposure_copy();
         view.was_enabled = false;
         diagnostics.state = DlssNrState::evaluation_failed;
         ++diagnostics.failed_calls;
@@ -1373,8 +1454,10 @@ bool evaluate_dlss_nr(
         1U,
         6U,
         settings,
-        codec_region
+        codec_region,
+        exposure
     );
+    release_exposure_copy();
     uav_barrier(frame.command_list, frame.color);
     transition(
         frame.command_list,
@@ -1471,6 +1554,7 @@ void note_dlss_nr_skipped(DlssNrRoute route, const Settings& settings, const cha
     std::lock_guard lock(nr_mutex);
     diagnostics.route = route;
     diagnostics.hdr_input = false;
+    diagnostics.exposure_source = diagnostics.exposure_format = 0U;
     diagnostics.processing_order = settings.nr_processing_order;
     diagnostics.skip_reason = reason;
     diagnostics.state = DlssNrState::input_preparation_failed;
@@ -1548,6 +1632,16 @@ const char* dlss_nr_route_name(const DlssNrRoute route) noexcept {
     case DlssNrRoute::d3d12_native: return "Direct3D 12";
     case DlssNrRoute::d3d11_transport: return "DX11 -> DX12 Transport";
     case DlssNrRoute::streamline: return "Streamline / Direct3D 12";
+    }
+    return "Unknown";
+}
+
+const char* dlss_nr_exposure_source_name(const std::uint32_t source) noexcept {
+    switch (static_cast<DlssNrExposureSource>(source)) {
+    case DlssNrExposureSource::none: return "Paper white slider (SDR input)";
+    case DlssNrExposureSource::game: return "Game exposure texture, scaled by the paper white slider";
+    case DlssNrExposureSource::unavailable: return "Paper white slider only; the game supplied no usable 1x1 exposure texture";
+    case DlssNrExposureSource::disabled: return "Paper white slider only; game exposure disabled";
     }
     return "Unknown";
 }

@@ -96,7 +96,8 @@ Additional notes:
   error code. A DLL that loaded but failed to initialize still needs a restart.
 - **Style** selects Standard, Natural or Cinematic. This changes a different model parameter from the old preset hints, which have been removed from the menus along with the unverified UI correction toggle.
 - **Intensity** controls the model edit from 0 (none) to 1 (full). Values above 1 from older settings files normalize to 1. **Local tone** and **Local structure** remain 0–2; compare their endpoints in a stationary scene to judge the effect.
-- **Skin structure** appears when **Automatic mask** is enabled. **Paper white** appears only when NR receives HDR input. These controls do not affect the picture outside those conditions.
+- **Skin structure** appears when **Automatic mask** is enabled. **Paper white** and **Use game exposure** appear only when NR receives HDR input. These controls do not affect the picture outside those conditions.
+- HDR input is scene-referred in many games. **Use game exposure** (on by default) divides it by the game's own exposure texture every frame before the model sees it; see [Game exposure for HDR input](#game-exposure-for-dlss-nr-hdr-input).
 - Direct3D 11 games require the **DX12 Transport** processing path for DLSS-NR.
 - DLSS-NR uses the shared gaze and stereo alignment settings even with SR foveation disabled. Its fovea width, height, roundness, and transition can be adjusted independently or linked to DLSS-SR, with a green alignment border for checking the region.
 - A DLSS-NR failure leaves the composited DLSS-SR result intact.
@@ -209,6 +210,32 @@ peripheral DLAA on/off, live order switching, dynamic resolution/resizing, both
 eyes, and gaze movement. Record image quality, actual NR working dimensions,
 NR GPU time, and total pipeline GPU time for both orders. Support reports include
 the selected order, dimensions, skip state, and separate timing samples.
+
+### Game exposure for DLSS-NR (HDR input)
+
+Games that create DLSS with the HDR flag hand it the linear scene before
+tonemapping. Several keep that buffer scene-referred, GTA V Enhanced among
+them: pre-exposure is 1 and the actual exposure arrives as a 1x1 texture (NGX
+`ExposureTexture`, Streamline tag 13). Earlier releases divided such input by
+the **Paper white** slider alone and clipped everything above it before the
+model ran. In daylight the model received a near-white image, and the decode,
+which keeps the model's colour and restores only the original luminance,
+returned grey wherever all three channels had clipped. Red surfaces survived
+because only their red channel clipped. Raising the slider recovered daylight
+but crushed night scenes to black, because one fixed divisor cannot follow the
+game's auto-exposure.
+
+**Use game exposure** (`NrGameExposure`, default on) copies the game's
+exposure texture each frame and divides the input by
+`pre_exposure / (exposure * exposure_scale)` before the slider, the same
+normalisation the red alignment border and calibration markers already use.
+**Paper white** then fine-tunes that result; `1.00` maps the game's own white
+to the model's white. The control appears only for HDR input. The exposure is
+read on the native Direct3D 12 and Streamline routes; the DX11 transport and
+Vulkan keep the fixed paper white. The DLSS-NR status panels, the runtime
+snapshot (`nr_details.exposure`) and support reports (`paper_white_source`)
+say whether the game exposure was applied, was not supplied by the game, or
+was disabled. Turn the option off to compare against the previous behaviour.
 
 ### RealVR OpenXR gaze without game input actions
 

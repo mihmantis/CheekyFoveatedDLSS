@@ -264,6 +264,8 @@ void draw_nr(Settings& s) {
             slider("Skin structure strength", s.nr_skin_structure_strength, 0.0F, 2.0F);
         ImGui::Checkbox("UI correction", &s.nr_ui_correction);
         slider("Paper white scale", s.nr_paper_white_scale, .01F, 8.0F);
+        ImGui::Checkbox("Use game exposure", &s.nr_use_game_exposure);
+        ImGui::TextWrapped("HDR input only: divides the scene by the game's exposure texture each frame so daylight is not clipped to white before the model; the paper white slider then fine-tunes it.");
         slider("HDR transfer strength", s.nr_hdr_transfer_strength, 0.0F, 2.0F);
         slider("Color strength", s.nr_color_strength, 0.0F, 2.0F);
         combo("Depth convention", s.nr_depth_convention, "Game NGX flags\0Normal depth\0Reversed depth\0");
@@ -714,6 +716,7 @@ void draw_nr_performance(std::string_view snapshot, const Settings& s) {
         diagnostic_line(snapshot, "State", "nr");
         const auto nr = member(snapshot, "nr_details");
         diagnostic_line(nr, "Current route", "route");
+        diagnostic_line(nr, "Paper white source", "exposure");
         if (!plain(member(nr, "skip_reason")).empty()) diagnostic_line(nr, "Skipped", "skip_reason");
         diagnostic_line(nr, "Candidates", "candidates");
         diagnostic_line(nr, "Evaluations", "evaluations");

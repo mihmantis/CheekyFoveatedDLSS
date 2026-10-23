@@ -73,6 +73,7 @@ std::atomic<std::uint32_t> nr_skin_structure_bits{0x3F800000U};
 std::atomic<bool> nr_automatic_mask{false};
 std::atomic<bool> nr_ui_correction{false};
 std::atomic<std::uint32_t> nr_paper_white_bits{0x3F800000U};
+std::atomic<bool> nr_use_game_exposure{true};
 std::atomic<std::uint32_t> nr_hdr_transfer_bits{0x3F800000U};
 std::atomic<std::uint32_t> nr_color_strength_bits{0x3F800000U};
 std::atomic<std::uint32_t> nr_depth_convention{};
@@ -225,6 +226,7 @@ Settings configured_settings() noexcept {
     settings.nr_automatic_mask = nr_automatic_mask.load(std::memory_order_acquire);
     settings.nr_ui_correction = nr_ui_correction.load(std::memory_order_acquire);
     settings.nr_paper_white_scale = load_float(nr_paper_white_bits);
+    settings.nr_use_game_exposure = nr_use_game_exposure.load(std::memory_order_acquire);
     settings.nr_hdr_transfer_strength = load_float(nr_hdr_transfer_bits);
     settings.nr_color_strength = load_float(nr_color_strength_bits);
     settings.nr_depth_convention =
@@ -387,6 +389,7 @@ void update_settings(const Settings& settings) noexcept {
         nr_paper_white_bits,
         std::clamp(settings.nr_paper_white_scale, 0.01F, 8.0F)
     );
+    nr_use_game_exposure.store(settings.nr_use_game_exposure, std::memory_order_release);
     store_float(
         nr_hdr_transfer_bits,
         std::clamp(settings.nr_hdr_transfer_strength, 0.0F, 2.0F)

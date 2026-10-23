@@ -63,6 +63,7 @@ inline NgxResult neural_scaling_ratio_callback(NgxParameters* const parameters) 
     append(settings.nr_foveated ? 1U : 0U);
     append(settings.nr_automatic_mask ? 1U : 0U);
     append(settings.nr_ui_correction ? 1U : 0U);
+    append(settings.nr_use_game_exposure ? 1U : 0U);
     append(settings.nr_depth_convention);
     append(region.width);
     append(region.height);

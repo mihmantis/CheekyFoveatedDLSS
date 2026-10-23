@@ -120,6 +120,10 @@ struct Settings {
     bool nr_automatic_mask{false};
     bool nr_ui_correction{false};
     float nr_paper_white_scale{1.0F};
+    // Divide HDR NR input by the game's exposure texture before the paper white
+    // slider. Scene-referred games (GTA V Enhanced) otherwise clip daylight to
+    // white before the model sees it and the decode can only return grey.
+    bool nr_use_game_exposure{true};
     float nr_hdr_transfer_strength{1.0F};
     float nr_color_strength{1.0F};
     // 0 follows the game's NGX flags, 1 forces normal depth, 2 reversed depth.

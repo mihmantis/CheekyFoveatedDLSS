@@ -196,6 +196,8 @@ std::string snapshot_locked(State& s) {
         << ",\"processing_order\":" << static_cast<unsigned>(nr.processing_order)
         << ",\"processing_width\":" << nr.processing_width << ",\"processing_height\":" << nr.processing_height
         << ",\"hdr_input\":" << (nr.hdr_input ? "true" : "false")
+        << ",\"exposure\":\"" << json_escape(dlss_nr_exposure_source_name(nr.exposure_source)) << "\""
+        << ",\"exposure_format\":" << nr.exposure_format
         << ",\"skip_reason\":\"" << json_escape(nr.skip_reason ? nr.skip_reason : "") << "\""
         << ",\"region_width\":" << nr.region_width << ",\"region_height\":" << nr.region_height
         << ",\"region_x\":" << nr.region_base_x << ",\"region_y\":" << nr.region_base_y

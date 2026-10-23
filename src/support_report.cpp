@@ -138,6 +138,7 @@ std::string settings_text(const Settings& s) {
     out << "nr_automatic_mask=" << s.nr_automatic_mask << '\n';
     out << "nr_ui_correction=" << s.nr_ui_correction << '\n';
     out << "nr_paper_white_scale=" << s.nr_paper_white_scale << '\n';
+    out << "nr_use_game_exposure=" << s.nr_use_game_exposure << '\n';
     out << "nr_hdr_transfer_strength=" << s.nr_hdr_transfer_strength << '\n';
     out << "nr_color_strength=" << s.nr_color_strength << '\n';
     out << "nr_depth_convention=" << s.nr_depth_convention << '\n';
@@ -268,6 +269,8 @@ std::string diagnostics_text() {
     const auto nr = dlss_nr_snapshot();
     out << "\n[DLSS-NR]\n";
     out << "state=" << dlss_nr_state_name(nr.state) << '\n';
+    out << "paper_white_source=" << dlss_nr_exposure_source_name(nr.exposure_source) << '\n';
+    out << "exposure_format=" << nr.exposure_format << '\n';
     out << "route=" << dlss_nr_route_name(nr.route) << '\n';
     out << "candidate_calls=" << nr.candidate_calls << '\n';
     out << "evaluation_calls=" << nr.evaluation_calls << '\n';

@@ -76,6 +76,11 @@ struct DlssNrFrame {
     std::uint32_t motion_full_width{}, motion_full_height{}, depth_full_width{}, depth_full_height{};
     std::uint32_t motion_copy_x{}, motion_copy_y{}, depth_copy_x{}, depth_copy_y{};
     std::uint32_t view_output_base_x{}, view_output_base_y{}; // Retained when Before NR switches color to input space.
+    // The game's 1x1 exposure texture (NGX ExposureTexture or Streamline tag 13)
+    // with its pre-exposure and scale. Null keeps the fixed paper white.
+    ID3D12Resource* exposure{};
+    D3D12_RESOURCE_STATES exposure_state{D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE};
+    float pre_exposure{1.0F}, exposure_scale{1.0F};
 };
 
 struct DlssNrSnapshot {
@@ -99,6 +104,17 @@ struct DlssNrSnapshot {
     std::uint32_t working_height{};
     std::uint64_t intermediate_vram_bytes{};
     std::uint64_t codec_creations{}, border_creations{}, resource_rebinds{};
+    // DlssNrExposureSource of the last evaluation and the bound texture's DXGI format.
+    std::uint32_t exposure_source{};
+    std::uint32_t exposure_format{};
+};
+
+// Where the codec's paper white came from on the last NR evaluation.
+enum class DlssNrExposureSource : std::uint32_t {
+    none,          // SDR input or no evaluation yet: the paper white slider alone.
+    game,          // Divided by the game's exposure texture each frame.
+    unavailable,   // HDR input without a usable 1x1 exposure texture.
+    disabled,      // HDR input with NrGameExposure off.
 };
 
 [[nodiscard]] bool evaluate_dlss_nr(
@@ -118,5 +134,6 @@ void reset_dlss_nr() noexcept;
 [[nodiscard]] DlssNrSnapshot dlss_nr_snapshot() noexcept;
 [[nodiscard]] const char* dlss_nr_state_name(DlssNrState state) noexcept;
 [[nodiscard]] const char* dlss_nr_route_name(DlssNrRoute route) noexcept;
+[[nodiscard]] const char* dlss_nr_exposure_source_name(std::uint32_t source) noexcept;
 
 }  // namespace cheeky::foveated_dlss

@@ -12,7 +12,7 @@ import tempfile
 
 
 ROOT = Path(__file__).resolve().parent.parent
-# name, source file, C++ raw-string symbol, HLSL entry, profile, optimization
+# name, source file, C++ raw-string symbol, HLSL entry, profile, optimization, optional defines
 SHADERS = [
     ("composite11", "src/d3d11_composite_shader.hpp", "d3d11_composite_shader_source", "CompositeMain", "cs_5_0", 3),
     ("composite12", "src/d3d12_composite_shader.hpp", "composite_shader_source", "CompositeMain", "cs_5_1", 3),
@@ -27,9 +27,10 @@ SHADERS = [
     ("peripheral12_depth", "src/peripheral_shaders.hpp", "depth_downsample_shader_source", "Main", "cs_5_1", 3),
     ("peripheral12_rr", "src/peripheral_shaders.hpp", "rr_guide_downsample_shader_source", "Main", "cs_5_1", 3),
     ("nr_guides", "src/nr_guide_shader.hpp", "nr_guide_shader", "main", "cs_5_0", 1),
-    ("nr_encode", "src/nr_codec_shader.hpp", "nr_codec_shader", "EncodeMain", "cs_5_1", 3),
-    ("nr_decode", "src/nr_codec_shader.hpp", "nr_codec_shader", "DecodeMain", "cs_5_1", 3),
-    ("nr_border", "src/nr_codec_shader.hpp", "nr_codec_shader", "BorderMain", "cs_5_0", 1),
+    # The D3D12 codec binds the game's exposure copy as a root SRV; Vulkan compiles without it.
+    ("nr_encode", "src/nr_codec_shader.hpp", "nr_codec_shader", "EncodeMain", "cs_5_1", 3, ("CHEEKY_NR_EXPOSURE_BUFFER=1",)),
+    ("nr_decode", "src/nr_codec_shader.hpp", "nr_codec_shader", "DecodeMain", "cs_5_1", 3, ("CHEEKY_NR_EXPOSURE_BUFFER=1",)),
+    ("nr_border", "src/nr_codec_shader.hpp", "nr_codec_shader", "BorderMain", "cs_5_0", 1, ("CHEEKY_NR_EXPOSURE_BUFFER=1",)),
     ("debug_marker12", "src/debug_marker12.hpp", "source", "main", "cs_5_0", 3),
 ]
 
@@ -58,18 +59,21 @@ def main() -> None:
     total = 0
     with tempfile.TemporaryDirectory() as directory:
         temp = Path(directory)
-        for name, file, symbol, entry, profile, optimization in SHADERS:
+        for name, file, symbol, entry, profile, optimization, *extra in SHADERS:
+            defines = extra[0] if extra else ()
             hlsl = temp / f"{name}.hlsl"
             compiled = temp / f"{name}.cso"
             hlsl.write_text(source_for(ROOT / file, symbol), encoding="utf-8")
             subprocess.run(
                 [str(args.fxc), "/nologo", f"/O{optimization}", "/T", profile,
-                 "/E", entry, "/Fo", str(compiled), str(hlsl)],
+                 "/E", entry, *[f"/D{define}" for define in defines],
+                 "/Fo", str(compiled), str(hlsl)],
                 check=True,
             )
             data = compiled.read_bytes()
             total += len(data)
-            output.append(f"// {file}: {symbol}, {entry}, {profile}, O{optimization}")
+            suffix = f", {' '.join(defines)}" if defines else ""
+            output.append(f"// {file}: {symbol}, {entry}, {profile}, O{optimization}{suffix}")
             output.append(f"inline constexpr std::uint8_t {name}_data[] = {{")
             for offset in range(0, len(data), 16):
                 output.append("    " + ", ".join(f"0x{b:02x}" for b in data[offset:offset + 16]) + ",")

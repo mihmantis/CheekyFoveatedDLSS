@@ -2763,6 +2763,7 @@ int run_d3d12_safety_tests();
 int run_vulkan_tests(bool real=false, bool integration=false);
 int run_d3d11_binding_tests();
 int run_debug_exposure_tests();
+int run_nr_exposure_tests();
 int main(int argc, char** argv) {
     if (argc == 2 && (std::strcmp(argv[1], "--openxr-independent-on") == 0 ||
         std::strcmp(argv[1], "--openxr-independent-off") == 0)) {
@@ -2807,6 +2808,7 @@ int main(int argc, char** argv) {
     if (argc == 2 && std::strcmp(argv[1], "--calibration-modes") == 0) return run_calibration_modes_tests();
     if (argc == 2 && std::strcmp(argv[1], "--retained-calibration") == 0) return run_retained_calibration_tests();
     if (argc == 2 && std::strcmp(argv[1], "--debug-exposure") == 0) return run_debug_exposure_tests();
+    if (argc == 2 && std::strcmp(argv[1], "--nr-exposure") == 0) return run_nr_exposure_tests();
     if (argc == 2 && std::strcmp(argv[1], "--openxr-input") == 0) return run_openxr_input_tests();
     extern int run_openxr_input_compatibility_tests(bool expected_il2);
     if (argc == 2 && std::strcmp(argv[1], "--openxr-input-il2") == 0) return run_openxr_input_compatibility_tests(true);
@@ -2914,6 +2916,7 @@ int main(int argc, char** argv) {
     test_openxr_layer_is_retained_while_snapshot_export_is_cached();
     failures += run_support_summary_tests();
     failures += run_debug_exposure_tests();
+    failures += run_nr_exposure_tests();
     failures += run_eye_calibration_tests();
     failures += run_retained_calibration_tests();
     failures += run_libovr_alternating_calibration_tests();

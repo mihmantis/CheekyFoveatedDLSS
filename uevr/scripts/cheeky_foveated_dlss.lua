@@ -517,6 +517,9 @@ uevr.lua.add_script_panel("Cheeky Foveated DLSS", function()
                     end
                     if (status.nr_details or {}).hdr_input == true then
                         slider("Paper white", "NrPaperWhiteScale", 0.01, 8)
+                        check("Use game exposure", "NrGameExposure")
+                        text("Divides HDR input by the game's exposure texture each frame; paper white fine-tunes it.")
+                        text("Paper white source: " .. (status.nr_details.exposure or "Unknown"))
                     end
                     slider("Transfer strength", "NrHdrTransferStrength", 0, 2)
                     slider("Color strength", "NrColorStrength", 0, 2)

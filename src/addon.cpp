@@ -511,6 +511,7 @@ void draw_nr_performance() {
         diagnostic_row("Rendering order", "%s", nr_processing_order_name(data.processing_order));
         diagnostic_row("Processing resolution", "%u x %u", data.processing_width, data.processing_height);
         diagnostic_row("Current route", "%s", dlss_nr_route_name(data.route));
+        diagnostic_row("Paper white source", "%s", dlss_nr_exposure_source_name(data.exposure_source));
         diagnostic_row(
             "Calls", "Candidate %llu | Evaluated %llu | Failed %llu",
             static_cast<unsigned long long>(data.candidate_calls),
@@ -925,6 +926,9 @@ void load_settings_from_reshade() noexcept {
         settings.nr_paper_white_scale
     ));
     static_cast<void>(reshade::get_config_value(
+        nullptr, config_section, "NrGameExposure", settings.nr_use_game_exposure
+    ));
+    static_cast<void>(reshade::get_config_value(
         nullptr, config_section, "NrHdrTransferStrength",
         settings.nr_hdr_transfer_strength
     ));
@@ -1100,6 +1104,9 @@ void save_settings_to_reshade(const Settings& settings) noexcept {
     reshade::set_config_value(
         nullptr, config_section, "NrPaperWhiteScale",
         settings.nr_paper_white_scale
+    );
+    reshade::set_config_value(
+        nullptr, config_section, "NrGameExposure", settings.nr_use_game_exposure
     );
     reshade::set_config_value(
         nullptr, config_section, "NrHdrTransferStrength",
@@ -1607,11 +1614,14 @@ void draw_nr_controls(Settings& settings, bool& changed) {
             "Skin structure strength", settings.nr_skin_structure_strength, drafts.skin_structure, drafts.editing_skin_structure,
             0.0F, 2.0F, "%.2f"
         );
-        if (dlss_nr_snapshot().hdr_input) {
+        if (const auto nr = dlss_nr_snapshot(); nr.hdr_input) {
             changed |= ImGui::SliderFloat(
                 "Paper white scale", &settings.nr_paper_white_scale,
                 0.01F, 8.0F, "%.2f", ImGuiSliderFlags_AlwaysClamp
             );
+            changed |= ImGui::Checkbox("Use game exposure", &settings.nr_use_game_exposure);
+            ImGui::TextDisabled("Divides HDR input by the game's exposure texture each frame; the paper white slider then fine-tunes it.");
+            ImGui::TextDisabled("Paper white source: %s", dlss_nr_exposure_source_name(nr.exposure_source));
         }
         changed |= ImGui::SliderFloat(
             "Transfer strength", &settings.nr_hdr_transfer_strength,
@@ -1665,6 +1675,7 @@ void draw_nr_controls(Settings& settings, bool& changed) {
         settings.nr_automatic_mask = defaults.nr_automatic_mask;
         settings.nr_ui_correction = defaults.nr_ui_correction;
         settings.nr_paper_white_scale = defaults.nr_paper_white_scale;
+        settings.nr_use_game_exposure = defaults.nr_use_game_exposure;
         settings.nr_hdr_transfer_strength = defaults.nr_hdr_transfer_strength;
         settings.nr_color_strength = defaults.nr_color_strength;
         settings.nr_depth_convention = defaults.nr_depth_convention;
