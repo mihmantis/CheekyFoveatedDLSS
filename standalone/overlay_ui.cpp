@@ -266,6 +266,8 @@ void draw_nr(Settings& s) {
         slider("Paper white scale", s.nr_paper_white_scale, .01F, 8.0F);
         ImGui::Checkbox("Use game exposure", &s.nr_use_game_exposure);
         ImGui::TextWrapped("HDR input only: divides the scene by the game's exposure texture each frame so daylight is not clipped to white before the model; the paper white slider then fine-tunes it.");
+        slider("Highlight roll-off knee", s.nr_highlight_knee, 0.0F, 0.95F);
+        ImGui::TextWrapped("HDR input only: rolls off highlights above this fraction of white so a sunlit exterior or sky seen from shade keeps its colour instead of turning grey; 0 clamps at white as before.");
         slider("HDR transfer strength", s.nr_hdr_transfer_strength, 0.0F, 2.0F);
         slider("Color strength", s.nr_color_strength, 0.0F, 2.0F);
         combo("Depth convention", s.nr_depth_convention, "Game NGX flags\0Normal depth\0Reversed depth\0");

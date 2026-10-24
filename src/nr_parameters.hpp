@@ -47,6 +47,7 @@ inline NgxResult neural_scaling_ratio_callback(NgxParameters* const parameters) 
             settings.nr_local_structure_strength,
             settings.nr_skin_structure_strength,
             settings.nr_paper_white_scale,
+            settings.nr_highlight_knee,
             settings.nr_hdr_transfer_strength,
             settings.nr_color_strength,
             settings.nr_motion_scale_x_multiplier,

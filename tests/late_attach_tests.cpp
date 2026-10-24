@@ -615,17 +615,23 @@ void verify_nr_reset_isolation(void (*command)(const char*), bool lower_hook) {
         exposure_desc.Format = DXGI_FORMAT_R32G32_FLOAT; exposure_desc.SampleDesc.Count = 1;
         D3D12_HEAP_PROPERTIES default_heap{}; default_heap.Type = D3D12_HEAP_TYPE_DEFAULT;
         ComPtr<ID3D12Resource> exposure;
-        check(f.device->CreateCommittedResource(&default_heap,D3D12_HEAP_FLAG_NONE,&exposure_desc,D3D12_RESOURCE_STATE_COPY_DEST,nullptr,IID_PPV_ARGS(&exposure)),"NR exposure texture");
-        auto exposure_upload = make_buffer(256,D3D12_HEAP_TYPE_UPLOAD);
-        check(exposure_upload->Map(0,nullptr,&mapped),"Map NR exposure");
-        static_cast<float*>(mapped)[0] = 0.125F; static_cast<float*>(mapped)[1] = 999.F; // Only red carries exposure.
-        exposure_upload->Unmap(0,nullptr);
-        D3D12_TEXTURE_COPY_LOCATION exposure_src{}, exposure_dst{};
-        exposure_src.pResource = exposure_upload.Get(); exposure_src.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
-        exposure_src.PlacedFootprint.Footprint = {DXGI_FORMAT_R32G32_FLOAT,1,1,1,256};
-        exposure_dst.pResource = exposure.Get(); exposure_dst.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
-        f.list->CopyTextureRegion(&exposure_dst,0,0,0,&exposure_src,nullptr);
-        transition_resource(exposure.Get(),D3D12_RESOURCE_STATE_COPY_DEST,D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+        check(f.device->CreateCommittedResource(&default_heap,D3D12_HEAP_FLAG_NONE,&exposure_desc,D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,nullptr,IID_PPV_ARGS(&exposure)),"NR exposure texture");
+        // Upload buffers stay alive until the recorded copies have executed.
+        std::vector<ComPtr<ID3D12Resource>> exposure_uploads;
+        const auto upload_exposure = [&](float value) {
+            auto exposure_upload = make_buffer(256,D3D12_HEAP_TYPE_UPLOAD);
+            check(exposure_upload->Map(0,nullptr,&mapped),"Map NR exposure");
+            static_cast<float*>(mapped)[0] = value; static_cast<float*>(mapped)[1] = 999.F; // Only red carries exposure.
+            exposure_upload->Unmap(0,nullptr);
+            D3D12_TEXTURE_COPY_LOCATION exposure_src{}, exposure_dst{};
+            exposure_src.pResource = exposure_upload.Get(); exposure_src.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
+            exposure_src.PlacedFootprint.Footprint = {DXGI_FORMAT_R32G32_FLOAT,1,1,1,256};
+            exposure_dst.pResource = exposure.Get(); exposure_dst.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+            transition_resource(exposure.Get(),D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,D3D12_RESOURCE_STATE_COPY_DEST);
+            f.list->CopyTextureRegion(&exposure_dst,0,0,0,&exposure_src,nullptr);
+            transition_resource(exposure.Get(),D3D12_RESOURCE_STATE_COPY_DEST,D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+            exposure_uploads.push_back(exposure_upload);
+        };
         // Every channel above paper white 1.0, as a sunlit GTA frame is.
         check(color_upload->Map(0,nullptr,&mapped),"Map NR HDR color");
         for (unsigned y = 0; y < color_desc.Height; ++y) {
@@ -662,26 +668,43 @@ void verify_nr_reset_isolation(void (*command)(const char*), bool lower_hook) {
         };
         const auto close_to = [](float actual, float expected) { return std::abs(actual - expected) <= 0.02F * expected; };
         const float grey = 0.2126F*4.F + 0.7152F*3.F + 0.0722F*2.F;
-        for (float white : {1.F, 2.F}) for (bool game_exposure : {true, false}) {
-            command((std::string("1\n96\nset\nNrGameExposure=") + (game_exposure ? "true" : "false") +
-                "\nNrPaperWhiteScale=" + std::to_string(white)).c_str()); evaluate(0);
+        // The identity model returns its input, so the round trip reproduces the
+        // (4, 3, 2) pixel whenever the encoder kept its hue and turns it into its
+        // grey luminance whenever every channel clamped at white.
+        struct HdrCase { float exposure; bool game_exposure; float knee; float white; bool keeps_hue; const char* why; };
+        const HdrCase hdr_cases[]{
+            // Exposure 1/8 puts the pixel at half of the exposed white.
+            {0.125F, true, 0.8F, 1.F, true, "Game exposure did not carry an over-range color through NR unchanged (stale src/d3d_shaders.hpp? rerun scripts/build-d3d-shaders.py)"},
+            {0.125F, true, 0.F, 2.F, true, "The paper white slider must scale the exposed white, not replace it"},
+            // Without the game exposure the pixel is four times above paper white.
+            {0.125F, false, 0.F, 1.F, false, "Fixed paper white without roll-off must clip an over-range color to its grey luminance"},
+            {0.125F, false, 0.8F, 1.F, true, "Highlight roll-off did not keep the hue of a color above paper white"},
+            // Exposure 1/2 leaves the pixel twice above the exposed white: a sunlit exterior seen from shade.
+            {0.5F, true, 0.F, 1.F, false, "Without roll-off a highlight above the exposed white must clip to grey"},
+            {0.5F, true, 0.8F, 1.F, true, "Highlight roll-off did not keep the hue of a sunlit exterior seen from shade"},
+        };
+        float uploaded_exposure{};
+        for (const auto& hdr_case : hdr_cases) {
+            if (hdr_case.exposure != uploaded_exposure) { upload_exposure(hdr_case.exposure); uploaded_exposure = hdr_case.exposure; }
+            command((std::string("1\n96\nset\nNrGameExposure=") + (hdr_case.game_exposure ? "true" : "false") +
+                "\nNrHighlightKnee=" + std::to_string(hdr_case.knee) +
+                "\nNrPaperWhiteScale=" + std::to_string(hdr_case.white)).c_str()); evaluate(0);
             float rgba[4]{}; read_hdr_pixel(rgba);
             require(rgba[3] == 1.F, "HDR NR round trip changed alpha");
-            if (game_exposure)
-                require(close_to(rgba[0],4.F) && close_to(rgba[1],3.F) && close_to(rgba[2],2.F),
-                    "Game exposure did not carry an over-range color through NR unchanged (stale src/d3d_shaders.hpp? rerun scripts/build-d3d-shaders.py)");
+            if (hdr_case.keeps_hue)
+                require(close_to(rgba[0],4.F) && close_to(rgba[1],3.F) && close_to(rgba[2],2.F), hdr_case.why);
             else
-                require(close_to(rgba[0],grey) && close_to(rgba[1],grey) && close_to(rgba[2],grey),
-                    "Fixed paper white must clip an over-range color to its grey luminance");
+                require(close_to(rgba[0],grey) && close_to(rgba[1],grey) && close_to(rgba[2],grey), hdr_case.why);
         }
         f.params.values.erase("ExposureTexture");
-        command("1\n96\nset\nNrGameExposure=true\nNrPaperWhiteScale=1"); evaluate(0);
+        command("1\n96\nset\nNrGameExposure=true\nNrHighlightKnee=0\nNrPaperWhiteScale=1"); evaluate(0);
         float rgba[4]{}; read_hdr_pixel(rgba);
         require(close_to(rgba[0],grey) && close_to(rgba[1],grey) && close_to(rgba[2],grey),
             "Without an exposure texture NR must fall back to the fixed paper white");
         f.params.values.erase("DLSS.Pre.Exposure"); f.params.values.erase("DLSS.Exposure.Scale");
         f.params.Set("DLSS.Feature.Create.Flags", 2U);
-        puts("PASS NR HDR round trip follows the game's exposure texture and falls back to paper white");
+        command("1\n96\nset\nNrGameExposure=true\nNrHighlightKnee=0.8\nNrPaperWhiteScale=1");
+        puts("PASS NR HDR round trip follows the game's exposure texture, rolls off highlights and falls back to paper white");
     }
     copy_nr_color(false);
     // Exercise the production feature cache through the fake NVIDIA runtime:

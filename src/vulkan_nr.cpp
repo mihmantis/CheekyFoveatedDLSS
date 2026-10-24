@@ -98,6 +98,7 @@ bool vulkan_nr(const VulkanDeviceApi& a,VkCommandBuffer cmd,const DlssFrameContr
         {0,0},{region.width,region.height},region.shape_width,region.shape_height,region.roundness,region.transition,
         settings.nr_alignment_border_enabled?1U:0U,region.mask.count,{},{}};
     std::memcpy(codec.mask_bounds,region.mask.bounds,sizeof(codec.mask_bounds));
+    codec.highlight_knee=settings.nr_highlight_knee;
     // All descriptor bindings remain valid even when an entry point doesn't use
     // them; this also keeps the shared codec layout identical on both APIs.
     for(auto* image:{&slot.original,&slot.proxy,&slot.neural,&slot.motion,&slot.depth})vulkan_prepare_image(a,cmd,*image);

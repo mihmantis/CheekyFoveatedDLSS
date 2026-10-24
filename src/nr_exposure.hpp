@@ -62,6 +62,27 @@ struct NrExposureBinding {
     return {mode, multiplier};
 }
 
+// Highlight roll-off above the white (CPU reference of the shader's
+// CompressHighlights). Values up to the knee are unchanged. Above it the
+// rational shoulder knee + span * t / (t + span), with t = value - knee and
+// span = 1 - knee, continues with slope one and approaches white without
+// reaching it, keeping gradation far above white, so a sunlit exterior seen
+// from shade keeps its hue instead of clamping to white in every channel. A
+// knee at zero, at white or above, or non-finite disables the roll-off.
+[[nodiscard]] inline float nr_highlight_curve(const float value, const float knee) noexcept {
+    if (!std::isfinite(knee) || knee <= 0.0F || knee >= 1.0F || !(value > knee)) return value;
+    const float span = 1.0F - knee;
+    const float excess = value - knee;
+    return knee + span * excess / (excess + span);
+}
+
+// Per-pixel factor that maps the maximum channel onto the curve; applying it to
+// all three channels preserves their ratios. One for black and in-range pixels.
+[[nodiscard]] inline float nr_highlight_scale(const float max_channel, const float knee) noexcept {
+    if (!(max_channel > 0.0F)) return 1.0F;
+    return nr_highlight_curve(max_channel, knee) / max_channel;
+}
+
 // CPU reference of the shader's per-frame white, for tests and diagnostics:
 // max(paper_white, 0.0001) * clamp(multiplier / exposure, 1e-6, 65504), or the
 // paper white alone when the exposure is unbound or unusable.

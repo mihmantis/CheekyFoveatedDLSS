@@ -929,6 +929,9 @@ void load_settings_from_reshade() noexcept {
         nullptr, config_section, "NrGameExposure", settings.nr_use_game_exposure
     ));
     static_cast<void>(reshade::get_config_value(
+        nullptr, config_section, "NrHighlightKnee", settings.nr_highlight_knee
+    ));
+    static_cast<void>(reshade::get_config_value(
         nullptr, config_section, "NrHdrTransferStrength",
         settings.nr_hdr_transfer_strength
     ));
@@ -1107,6 +1110,9 @@ void save_settings_to_reshade(const Settings& settings) noexcept {
     );
     reshade::set_config_value(
         nullptr, config_section, "NrGameExposure", settings.nr_use_game_exposure
+    );
+    reshade::set_config_value(
+        nullptr, config_section, "NrHighlightKnee", settings.nr_highlight_knee
     );
     reshade::set_config_value(
         nullptr, config_section, "NrHdrTransferStrength",
@@ -1622,6 +1628,11 @@ void draw_nr_controls(Settings& settings, bool& changed) {
             changed |= ImGui::Checkbox("Use game exposure", &settings.nr_use_game_exposure);
             ImGui::TextDisabled("Divides HDR input by the game's exposure texture each frame; the paper white slider then fine-tunes it.");
             ImGui::TextDisabled("Paper white source: %s", dlss_nr_exposure_source_name(nr.exposure_source));
+            changed |= ImGui::SliderFloat(
+                "Highlight roll-off knee", &settings.nr_highlight_knee,
+                0.0F, 0.95F, "%.2f", ImGuiSliderFlags_AlwaysClamp
+            );
+            ImGui::TextDisabled("Rolls off highlights above this fraction of white so bright exteriors and sky keep their colour; 0 clamps at white.");
         }
         changed |= ImGui::SliderFloat(
             "Transfer strength", &settings.nr_hdr_transfer_strength,
@@ -1676,6 +1687,7 @@ void draw_nr_controls(Settings& settings, bool& changed) {
         settings.nr_ui_correction = defaults.nr_ui_correction;
         settings.nr_paper_white_scale = defaults.nr_paper_white_scale;
         settings.nr_use_game_exposure = defaults.nr_use_game_exposure;
+        settings.nr_highlight_knee = defaults.nr_highlight_knee;
         settings.nr_hdr_transfer_strength = defaults.nr_hdr_transfer_strength;
         settings.nr_color_strength = defaults.nr_color_strength;
         settings.nr_depth_convention = defaults.nr_depth_convention;

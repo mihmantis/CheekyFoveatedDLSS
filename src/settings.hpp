@@ -124,6 +124,9 @@ struct Settings {
     // slider. Scene-referred games (GTA V Enhanced) otherwise clip daylight to
     // white before the model sees it and the decode can only return grey.
     bool nr_use_game_exposure{true};
+    // Roll off HDR highlights above this fraction of the paper white instead of
+    // clamping them, so bright exteriors keep their hue. Zero clamps as before.
+    float nr_highlight_knee{0.8F};
     float nr_hdr_transfer_strength{1.0F};
     float nr_color_strength{1.0F};
     // 0 follows the game's NGX flags, 1 forces normal depth, 2 reversed depth.

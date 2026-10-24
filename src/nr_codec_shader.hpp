@@ -24,8 +24,13 @@ struct CodecConstants {
         std::uint32_t exposure_mode;
         float exposure_multiplier;
         float mask_bounds[4][4];
+        // Highlight roll-off knee in units of the paper white (nr_exposure.hpp).
+        // Zero clamps at white as before.
+        float highlight_knee;
+        std::uint32_t highlight_padding[3];
     };
-    static_assert(sizeof(CodecConstants) == 40U * sizeof(std::uint32_t));
+    static_assert(sizeof(CodecConstants) == 44U * sizeof(std::uint32_t));
+    inline constexpr std::uint32_t codec_constant_count = sizeof(CodecConstants) / sizeof(std::uint32_t);
 inline constexpr char nr_codec_shader[] = R"(
 Texture2D<float4> Source0 : register(t0);
 Texture2D<float4> Source1 : register(t1);
@@ -57,7 +62,24 @@ cbuffer CodecConstants : register(b0) {
     uint ExposureMode;
     float ExposureMultiplier;
     float4 MaskBounds[4];
+    float HighlightKnee;
+    uint3 HighlightPadding;
 };
+
+// Roll off highlights above the knee instead of clamping them at white. All
+// three channels share one factor, so a sunlit exterior or sky seen from shade
+// keeps its hue; the decode restores the original brightness afterwards. The
+// curve is the identity up to the knee, then the rational shoulder
+// knee + span * t / (t + span): slope one at the knee, approaching white
+// without reaching it. A zero knee keeps the previous hard clamp.
+float3 CompressHighlights(float3 color) {
+    const float peak = max(color.r, max(color.g, color.b));
+    if (HighlightKnee <= 0.0 || HighlightKnee >= 1.0 || peak <= HighlightKnee) return color;
+    const float span = 1.0 - HighlightKnee;
+    const float excess = peak - HighlightKnee;
+    const float rolled = HighlightKnee + span * excess / (excess + span);
+    return color * (rolled / peak);
+}
 
 // Scene value mapped to paper white: the slider, scaled by the game's exposure
 // (pre_exposure / (exposure * scale)) when a usable exposure copy is bound.
@@ -207,7 +229,7 @@ void EncodeMain(uint3 dispatch_id : SV_DispatchThreadID) {
             SourceBase,
             SourceSize
         );
-        const float3 linear_color = max(proxy_source.rgb / PaperWhite(), 0.0);
+        const float3 linear_color = CompressHighlights(max(proxy_source.rgb / PaperWhite(), 0.0));
         const float3 encoded = HdrMode != 0 ? SrgbEncode(linear_color) : proxy_source.rgb;
         Output1[dispatch_id.xy] = float4(encoded, proxy_source.a);
     }

@@ -718,7 +718,7 @@ void evict_retired_features(ViewState& view) noexcept {
     root_parameters[1].DescriptorTable.pDescriptorRanges = &ranges[1];
     root_parameters[2].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
     root_parameters[2].Constants.ShaderRegister = 0U;
-    root_parameters[2].Constants.Num32BitValues = 40U;
+    root_parameters[2].Constants.Num32BitValues = codec_constant_count;
     // The exposure copy (t3). Encode and decode read it only when the
     // constants' exposure mode is set; the border shader never binds it.
     root_parameters[3].ParameterType = D3D12_ROOT_PARAMETER_TYPE_SRV;
@@ -948,7 +948,8 @@ void dispatch_codec(
         region.mask.count, exposure.mode, exposure.multiplier,
     };
     std::memcpy(constants.mask_bounds, region.mask.bounds, sizeof(constants.mask_bounds));
-    frame.command_list->SetComputeRoot32BitConstants(2U, 40U, &constants, 0U);
+    constants.highlight_knee = settings.nr_highlight_knee;
+    frame.command_list->SetComputeRoot32BitConstants(2U, codec_constant_count, &constants, 0U);
     const auto dispatch_width = (std::max)(width, gpu.working_width);
     const auto dispatch_height = (std::max)(height, gpu.working_height);
     frame.command_list->Dispatch(

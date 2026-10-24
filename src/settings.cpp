@@ -74,6 +74,7 @@ std::atomic<bool> nr_automatic_mask{false};
 std::atomic<bool> nr_ui_correction{false};
 std::atomic<std::uint32_t> nr_paper_white_bits{0x3F800000U};
 std::atomic<bool> nr_use_game_exposure{true};
+std::atomic<std::uint32_t> nr_highlight_knee_bits{0x3F4CCCCDU};
 std::atomic<std::uint32_t> nr_hdr_transfer_bits{0x3F800000U};
 std::atomic<std::uint32_t> nr_color_strength_bits{0x3F800000U};
 std::atomic<std::uint32_t> nr_depth_convention{};
@@ -227,6 +228,7 @@ Settings configured_settings() noexcept {
     settings.nr_ui_correction = nr_ui_correction.load(std::memory_order_acquire);
     settings.nr_paper_white_scale = load_float(nr_paper_white_bits);
     settings.nr_use_game_exposure = nr_use_game_exposure.load(std::memory_order_acquire);
+    settings.nr_highlight_knee = load_float(nr_highlight_knee_bits);
     settings.nr_hdr_transfer_strength = load_float(nr_hdr_transfer_bits);
     settings.nr_color_strength = load_float(nr_color_strength_bits);
     settings.nr_depth_convention =
@@ -390,6 +392,12 @@ void update_settings(const Settings& settings) noexcept {
         std::clamp(settings.nr_paper_white_scale, 0.01F, 8.0F)
     );
     nr_use_game_exposure.store(settings.nr_use_game_exposure, std::memory_order_release);
+    // Non-finite values disable the roll-off; the knee stays below white so the
+    // curve keeps a positive span.
+    store_float(
+        nr_highlight_knee_bits,
+        std::isfinite(settings.nr_highlight_knee) ? std::clamp(settings.nr_highlight_knee, 0.0F, 0.95F) : 0.0F
+    );
     store_float(
         nr_hdr_transfer_bits,
         std::clamp(settings.nr_hdr_transfer_strength, 0.0F, 2.0F)

@@ -69,6 +69,39 @@ void test_white_reference_matches_the_shader_formula() {
     require(close_to(nr_exposure_white(1.0F, 1.0F, 1e9F), 1e-6F), "The white never reaches zero");
     require(close_to(nr_exposure_white(0.0F, 1.0F, 0.125F), 0.0001F * 8.0F), "Paper white keeps the shader's lower bound");
 }
+void test_highlight_rolloff_is_identity_below_the_knee_and_never_clips() {
+    const float knee = 0.8F;
+    require(close_to(nr_highlight_curve(0.5F, knee), 0.5F), "Below the knee the curve is the identity");
+    require(close_to(nr_highlight_curve(knee, knee), knee), "The curve is continuous at the knee");
+    const float step = 1e-3F;
+    require(close_to((nr_highlight_curve(knee + step, knee) - knee) / step, 1.0F, 1e-2F),
+        "The slope stays one at the knee, so the roll-off starts invisibly");
+    float previous = 0.0F;
+    for (float value = 0.0F; value <= 64.0F; value += 0.25F) {
+        const float curve = nr_highlight_curve(value, knee);
+        require(curve >= previous && curve <= 1.0F, "The curve is monotonic and never exceeds white");
+        previous = curve;
+    }
+    require(nr_highlight_curve(4.0F, knee) < 1.0F, "Moderate highlights stay below white");
+    require(nr_highlight_curve(1000.0F, knee) > 0.9999F, "Very bright values approach white");
+    require(nr_highlight_curve(4.0F, 0.0F) == 4.0F, "A zero knee disables the roll-off");
+    require(nr_highlight_curve(4.0F, 1.0F) == 4.0F, "A knee at white or above disables the roll-off");
+    require(nr_highlight_curve(4.0F, nan) == 4.0F, "A NaN knee disables the roll-off");
+}
+
+void test_highlight_scale_keeps_channel_ratios() {
+    const float knee = 0.8F;
+    const float scale = nr_highlight_scale(4.0F, knee);
+    require(close_to(4.0F * scale, nr_highlight_curve(4.0F, knee)), "The scale maps the maximum channel onto the curve");
+    require(scale > 0.0F && scale < 1.0F, "Over-range pixels are scaled down, never inverted");
+    require(close_to(nr_highlight_scale(0.5F, knee), 1.0F), "In-range pixels are unscaled");
+    require(nr_highlight_scale(0.0F, knee) == 1.0F, "Black is unscaled rather than divided by zero");
+    require(nr_highlight_scale(4.0F, 0.0F) == 1.0F, "A disabled roll-off leaves the clamp to the encoder");
+    // A sunlit (2, 1.5, 1) pixel seen from shade keeps its hue: the ratios survive.
+    const float sky = nr_highlight_scale(2.0F, knee);
+    require(close_to((2.0F * sky) / (1.0F * sky), 2.0F) && close_to((1.5F * sky) / (1.0F * sky), 1.5F),
+        "Channel ratios are unchanged by the roll-off");
+}
 }  // namespace
 
 int run_nr_exposure_tests() {
@@ -77,7 +110,9 @@ int run_nr_exposure_tests() {
         test_multiplier_is_pre_exposure_over_scale_or_zero();
         test_binding_requires_hdr_setting_and_a_supported_1x1_texture();
         test_white_reference_matches_the_shader_formula();
-        std::puts("PASS NR game exposure binding and white reference");
+        test_highlight_rolloff_is_identity_below_the_knee_and_never_clips();
+        test_highlight_scale_keeps_channel_ratios();
+        std::puts("PASS NR game exposure binding, white reference and highlight roll-off");
         return 0;
     } catch (const std::exception& e) {
         std::fprintf(stderr, "FAIL %s\n", e.what());

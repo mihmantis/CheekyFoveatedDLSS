@@ -520,6 +520,8 @@ uevr.lua.add_script_panel("Cheeky Foveated DLSS", function()
                         check("Use game exposure", "NrGameExposure")
                         text("Divides HDR input by the game's exposure texture each frame; paper white fine-tunes it.")
                         text("Paper white source: " .. (status.nr_details.exposure or "Unknown"))
+                        slider("Highlight roll-off knee", "NrHighlightKnee", 0, 0.95)
+                        text("Rolls off highlights above this fraction of white so bright exteriors keep colour; 0 clamps.")
                     end
                     slider("Transfer strength", "NrHdrTransferStrength", 0, 2)
                     slider("Color strength", "NrColorStrength", 0, 2)

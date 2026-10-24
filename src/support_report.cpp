@@ -139,6 +139,7 @@ std::string settings_text(const Settings& s) {
     out << "nr_ui_correction=" << s.nr_ui_correction << '\n';
     out << "nr_paper_white_scale=" << s.nr_paper_white_scale << '\n';
     out << "nr_use_game_exposure=" << s.nr_use_game_exposure << '\n';
+    out << "nr_highlight_knee=" << s.nr_highlight_knee << '\n';
     out << "nr_hdr_transfer_strength=" << s.nr_hdr_transfer_strength << '\n';
     out << "nr_color_strength=" << s.nr_color_strength << '\n';
     out << "nr_depth_convention=" << s.nr_depth_convention << '\n';

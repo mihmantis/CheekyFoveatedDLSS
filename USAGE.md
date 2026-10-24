@@ -237,6 +237,16 @@ snapshot (`nr_details.exposure`) and support reports (`paper_white_source`)
 say whether the game exposure was applied, was not supplied by the game, or
 was disabled. Turn the option off to compare against the previous behaviour.
 
+The exposure follows what the game is adapted to, so a sunlit exterior or the
+sky seen from shade still lies above the exposed white. **Highlight roll-off
+knee** (`NrHighlightKnee`, default `0.80`, range 0 to 0.95) replaces the hard
+clamp there: values up to the knee are unchanged, values above it are rolled
+off towards white along a Reinhard-style shoulder with all three channels scaled together, so those regions
+keep their hue and the decode restores their brightness. `0` clamps at white
+as earlier releases did. Lower values start the roll-off earlier and flatten
+more of the bright range the model sees; raise the knee if highlights look
+soft, lower it if very bright areas still lose colour.
+
 ### RealVR OpenXR gaze without game input actions
 
 The OpenXR layer enables `XR_EXT_eye_gaze_interaction` when available and creates
